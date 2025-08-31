@@ -1,51 +1,35 @@
-# Metrodle Dupe — Blank SVG Edition (UI-polished, no Cairo)
-# Functional game/calibration unchanged; layout + live suggestions + feedback added.
+# Metrodle Dupe — Blank SVG Edition (Public, responsive)
+# Calibration removed for public deployment; gameplay unchanged. UI is mobile-friendly.
 
 import base64
 import csv
 import datetime as dt
-import io
 import os
 import random
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-from PIL import Image
-import fitz  # PyMuPDF
-
-# Optional (recommended) click helper
-try:
-    from streamlit_image_coordinates import streamlit_image_coordinates
-except Exception:
-    streamlit_image_coordinates = None
-
 
 # -------------------- PATHS --------------------
-from pathlib import Path
-
 BASE_DIR = Path(__file__).parent.resolve()
-ASSETS_DIR = BASE_DIR / "maps"            # ← folder in your repo
+ASSETS_DIR = BASE_DIR / "maps"
 
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # BLANK SVG (in maps/)
-PDF_PATH = ASSETS_DIR / "large-print-tube-map.pdf"    # LABELED PDF (in maps/)
-DB_PATH  = BASE_DIR / "stations_db.csv"               # created automatically
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # blank SVG shown to users
+DB_PATH  = BASE_DIR / "stations_db.csv"               # pre-populated via your private app
 
-
-# -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620     # viewport in the app
-ZOOM           = 3.0          # how much the map is zoomed into the station
-RING_PX        = 28           # ring radius in pixels (min clamp)
-RING_STROKE    = 6
-MAX_GUESSES    = 6
-
-# Calibration image sizing (keeps payload < 200MB)
-CAL_DPI        = 120          # raster DPI for PDF
-CAL_MAX_W      = 1400         # max raster width (server side)
-CAL_DISPLAY_W  = 1000         # width shown in browser during calibration
-
+# -------------------- TUNING (visual only) --------------------
+# These are *bounds* for responsive sizing; the map container will clamp within them.
+MAP_MAX_W   = 980   # px (desktop max width)
+MAP_MIN_H   = 360   # px (phone min height)
+MAP_MAX_H   = 620   # px (desktop max height)
+ZOOM        = 3.0   # how much the map is zoomed into the station
+RING_PX     = 28    # ring radius in pixels (min clamp)
+RING_STROKE = 6
+MAX_GUESSES = 6
 
 # -------------------- DATA --------------------
 @dataclass
@@ -68,7 +52,6 @@ def clean_display(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-
 ALIASES = {
     "towerhamlets": "Tower Hill",
     "stpauls": "St Paul’s",
@@ -79,20 +62,12 @@ ALIASES = {
     "tottenham court rd": "Tottenham Court Road",
 }
 
-LINES_CATALOG = [
-    # Underground
-    "Bakerloo", "Central", "Circle", "District", "Hammersmith & City",
-    "Jubilee", "Metropolitan", "Northern", "Piccadilly", "Victoria", "Waterloo & City",
-    # TfL modes
-    "Elizabeth line", "Overground", "DLR", "Thameslink", "Tram", "National Rail",
-]
 def normalize_lines(lines: List[str]) -> List[str]:
     return sorted(set([(l or "").lower().strip() for l in lines if l]))
 
-
 # -------------------- STORAGE --------------------
 def ensure_db():
-    if not os.path.exists(DB_PATH):
+    if not DB_PATH.exists():
         with open(DB_PATH, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["name", "fx", "fy", "lines"])
 
@@ -112,25 +87,6 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
                 continue
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
-
-def upsert_station(name: str, fx: float, fy: float, lines: List[str]):
-    ensure_db()
-    name = clean_display(name)
-    key = norm(name)
-    rows, found = [], False
-    with open(DB_PATH, newline="", encoding="utf-8") as f:
-        rdr = csv.DictReader(f)
-        for r in rdr:
-            if norm(r["name"]) == key:
-                r = {"name": name, "fx": f"{fx:.6f}", "fy": f"{fy:.6f}", "lines": ";".join(normalize_lines(lines))}
-                found = True
-            rows.append(r)
-    if not found:
-        rows.append({"name": name, "fx": f"{fx:.6f}", "fy": f"{fy:.6f}", "lines": ";".join(normalize_lines(lines))})
-    with open(DB_PATH, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["name", "fx", "fy", "lines"])
-        w.writeheader(); [w.writerow(r) for r in rows]
-
 
 # -------------------- SUGGEST/RESOLVE --------------------
 def alias_name(q: str) -> str:
@@ -160,14 +116,13 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
     matches = [n for n in names if n.lower().startswith(q)]
     return sorted(matches)[:limit]
 
-
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
-def load_svg_data(svg_path: str) -> Tuple[str, float, float]:
+def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     """Return (data_uri, baseW, baseH) for SVG; infer size from viewBox/width/height."""
-    if not os.path.exists(svg_path):
+    if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
-    raw = open(svg_path, "rb").read()
+    raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
@@ -182,57 +137,79 @@ def load_svg_data(svg_path: str) -> Tuple[str, float, float]:
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
-@st.cache_resource(show_spinner=False)
-def render_pdf_page_to_png(pdf_path: str, dpi: int = CAL_DPI, max_width: int = CAL_MAX_W) -> Tuple[Image.Image, int, int]:
-    """Rasterize page 0 of labeled PDF, then downscale to keep payload small."""
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"PDF not found: {pdf_path}")
-    doc = fitz.open(pdf_path)
-    page = doc[0]
-    zoom = dpi / 72.0
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    if img.width > max_width:
-        scale = max_width / float(img.width)
-        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.BILINEAR)
-    return img, img.width, img.height
-
-
-# -------------------- GEOMETRY / HTML --------------------
-def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
-    cx, cy = fx * baseW, fy * baseH
-    tx = VIEW_W / 2 - cx * zoom
-    ty = VIEW_H / 2 - cy * zoom
-    return tx, ty
-
+# -------------------- GEOMETRY / HTML (responsive) --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float,
                   zoom: float, colorize: bool, ring_color: str) -> str:
-    tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
+    """
+    Responsive map container:
+      - width: min(100%, MAP_MAX_W)
+      - height: clamp(MAP_MIN_H, 62vw, MAP_MAX_H)
+    Centering uses CSS calc(50% - px) so it adapts to container size.
+    """
+    # Pixel center of station in the original SVG coordinates (pre-zoom)
+    cx, cy = fx * baseW, fy * baseH
     filt = "grayscale(0)" if colorize else "grayscale(1) brightness(1.02)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
+
     return f"""
-    <div style="position:relative;width:{VIEW_W}px;height:{VIEW_H}px;overflow:hidden;border-radius:14px;background:#f6f7f8;margin:0 auto;">
+    <div style="
+      position:relative;
+      width:min(100%, {MAP_MAX_W}px);
+      height:clamp({MAP_MIN_H}px, 62vw, {MAP_MAX_H}px);
+      overflow:hidden;border-radius:14px;background:#f6f7f8;margin:0 auto;">
       <img src="{svg_uri}"
-           style="position:absolute;top:0;left:0;width:{baseW}px;height:{baseH}px;
-                  transform: translate({tx}px,{ty}px) scale({zoom}); transform-origin: top left; filter:{filt};">
-      <div style="position:absolute;left:{VIEW_W/2 - r_px}px;top:{VIEW_H/2 - r_px}px;
-                  width:{2*r_px}px;height:{2*r_px}px;border:{RING_STROKE}px solid {ring_color};
-                  border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.45) inset;"></div>
+           style="
+              position:absolute;top:0;left:0;width:{baseW}px;height:{baseH}px;
+              transform: translate(calc(50% - {cx*zoom}px), calc(50% - {cy*zoom}px)) scale({zoom});
+              transform-origin: top left; filter:{filt};">
+      <div style="
+              position:absolute;
+              left:calc(50% - {r_px}px); top:calc(50% - {r_px}px);
+              width:{2*r_px}px;height:{2*r_px}px;border:{RING_STROKE}px solid {ring_color};
+              border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.45) inset;"></div>
     </div>
     """
-
 
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Metrodle — Blank SVG", page_icon="🗺️", layout="wide")
 st.title("Metrodle — Blank SVG Edition")
 
+# Global CSS: tighten layout on mobile, larger touch targets
+st.markdown(
+    f"""
+    <style>
+      /* Make central column narrower on large screens, full on mobile */
+      .block-container {{ max-width: 1100px; padding-top: 0.5rem; }}
+      /* Center text inputs, larger touch-friendly height */
+      .stTextInput>div>div>input {{
+        text-align: center;
+        height: 44px;
+        font-size: 1rem;
+      }}
+      /* Suggestion buttons: touch-friendly */
+      .sugg-list .stButton>button {{
+        min-height: 44px;
+        font-size: 1rem;
+        border-radius: 10px;
+      }}
+      /* Play-again button bigger */
+      .play-again .stButton>button {{
+        font-size: 1.05rem;
+        padding: 12px 22px;
+        border-radius: 10px;
+      }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 with st.expander("Diagnostics", expanded=False):
     st.write("Python executable:", sys.executable)
-    st.write("SVG exists:", os.path.exists(SVG_PATH))
-    st.write("PDF exists:", os.path.exists(PDF_PATH))
-    st.write("DB path:", DB_PATH)
+    st.write("SVG exists:", SVG_PATH.exists())
+    st.write("DB exists:", DB_PATH.exists())
+    st.write("DB path:", str(DB_PATH))
 
-# Load assets (no Cairo!)
+# Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
 # session state
@@ -243,67 +220,28 @@ if "phase" not in st.session_state:
     st.session_state.remaining=MAX_GUESSES
     st.session_state.history=[]
     st.session_state.won=False
-    st.session_state.calib=False
 if "guess_text" not in st.session_state:
     st.session_state["guess_text"] = ""   # filter box contents
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""     # feedback message for wrong guesses
 
-c1,c2,c3 = st.columns([1,1,1])
-with c1: st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
-with c2:
-    if st.button("Open Calibration Mode"): st.session_state.calib=True
-with c3:
-    if st.session_state.calib and st.button("Back to Game"): st.session_state.calib=False
+# Mode selector
+c1, _, _ = st.columns([1,1,1])
+with c1:
+    st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
 
 STATIONS, BY_KEY, NAMES = load_db()
-
-
-# -------- Calibration (unchanged except for payload sizing) --------
-if st.session_state.calib:
-    st.subheader("Calibration")
-    if streamlit_image_coordinates is None:
-        st.warning(f'Install click helper:\n  "{sys.executable}" -m pip install streamlit-image-coordinates')
-        st.stop()
-
-    pdf_img, pdfW, pdfH = render_pdf_page_to_png(PDF_PATH, dpi=CAL_DPI, max_width=CAL_MAX_W)
-    res = streamlit_image_coordinates(pdf_img, width=CAL_DISPLAY_W, key="calib_click")
-    name = st.text_input("Station name")
-    lines = st.multiselect("Lines (select all that apply)", options=LINES_CATALOG)
-
-    fx = fy = None
-    if res:
-        disp_w = res.get("display_width", CAL_DISPLAY_W)
-        scale = pdfW / float(disp_w)
-        px = float(res["x"]) * scale
-        py = float(res["y"]) * scale
-        fx = px / pdfW
-        fy = py / pdfH
-
-        # Live preview (blank SVG) — centered
-        html = make_map_html(SVG_URI, SVG_W, SVG_H, fx, fy, ZOOM, colorize=True, ring_color="#22c55e")
-        _a, m, _b = st.columns([1,2,1])
-        with m:
-            st.components.v1.html(html, height=VIEW_H, scrolling=False)
-
-    if st.button("Save station", type="primary", disabled=not(res and name and lines)):
-        upsert_station(name, fx, fy, lines)
-        st.success(f"Saved: {name}")
-    st.stop()
-
 
 # -------- Game helpers --------
 def start_round() -> bool:
     if not STATIONS:
-        st.warning("No stations calibrated yet — open Calibration Mode and add some.")
+        st.warning("No stations found in stations_db.csv. (Private calibration required.)")
         return False
-    # Reset round state
     st.session_state.phase="play"
     st.session_state.history=[]
     st.session_state.remaining=MAX_GUESSES
     st.session_state.won=False
     st.session_state["feedback"] = ""
-    # Clear filter BEFORE the input is rendered in the next run
     if "guess_text" in st.session_state:
         del st.session_state["guess_text"]
     rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
@@ -317,7 +255,6 @@ if st.session_state.phase=="start":
         if st.button("Start Game", type="primary", use_container_width=True):
             if start_round(): st.rerun()
 
-
 # -------- Game play / end screens --------
 if st.session_state.phase in ("play", "end") and STATIONS:
     answer: Station = st.session_state.answer or STATIONS[0]
@@ -328,37 +265,26 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Center the map
+    # Center the map (responsive container)
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize=colorize, ring_color=ring)
-        st.components.v1.html(html, height=VIEW_H, scrolling=False)
+        st.components.v1.html(html, height=MAP_MAX_H, scrolling=False)  # height is max; CSS clamps smaller on mobile
 
         if st.session_state.phase == "play":
-            # ---------- Styles ----------
+            # ---------- Styles for suggestions ----------
             st.markdown(
                 """
                 <style>
                   .sugg-list {max-width: 540px; margin: 10px auto 6px auto;}
-                  .sugg-item button {
-                      width: 100%;
-                      text-align: center;
-                      padding: 8px 10px;
-                      border-radius: 10px;
-                      border: 1px solid rgba(255,255,255,0.12);
-                      margin-bottom: 6px;
-                  }
-                  .sugg-item button:hover {background:#f6f7f8; color:#111}
-                  .stTextInput>div>div>input {text-align:center}
                 </style>
                 """,
                 unsafe_allow_html=True,
             )
 
-            # Place suggestions ABOVE the input but compute them AFTER the input
+            # Suggestions ABOVE the input but computed AFTER the input
             suggestions_box = st.container()
 
-            # Make sure filter key exists each run (it was deleted on new round)
             if "guess_text" not in st.session_state:
                 st.session_state["guess_text"] = ""
 
@@ -370,7 +296,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                 label_visibility="collapsed"
             )
 
-            # Now render suggestions (above the input) using a placeholder
+            # Render suggestions (above the input) via placeholder
             with suggestions_box:
                 sugg = prefix_suggestions(q, NAMES, limit=5)
                 if sugg:
@@ -405,17 +331,12 @@ if st.session_state.phase in ("play", "end") and STATIONS:
             st.markdown("**Your guesses:** " + ", ".join(st.session_state.history))
         st.caption(f"Guesses left: {st.session_state.remaining}")
 
-    # End-screen messaging (no input rendered here)
+    # End-screen messaging
     if st.session_state.phase == "end":
-        # make the play-again button big & centered
         st.markdown(
             """
             <style>
-              .play-again .stButton>button {
-                  font-size: 1.05rem;
-                  padding: 12px 22px;
-                  border-radius: 10px;
-              }
+              .play-again .stButton>button { min-height: 48px; }
             </style>
             """,
             unsafe_allow_html=True,
