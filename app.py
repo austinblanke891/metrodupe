@@ -24,10 +24,15 @@ except Exception:
 
 
 # -------------------- PATHS --------------------
-BASE_DIR = os.path.dirname(__file__)
-SVG_PATH = r"C:\Users\Austin\OneDrive - Blanke Advisors\Desktop\Metrodle Dupe\maps\tube_map_clean.svg"          # BLANK SVG
-PDF_PATH = r"C:\Users\Austin\OneDrive - Blanke Advisors\Desktop\Metrodle Dupe\maps\large-print-tube-map.pdf"   # LABELED PDF
-DB_PATH  = os.path.join(BASE_DIR, "stations_db.csv")  # created automatically
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent.resolve()
+ASSETS_DIR = BASE_DIR / "maps"            # ← folder in your repo
+
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # BLANK SVG (in maps/)
+PDF_PATH = ASSETS_DIR / "large-print-tube-map.pdf"    # LABELED PDF (in maps/)
+DB_PATH  = BASE_DIR / "stations_db.csv"               # created automatically
+
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620     # viewport in the app
