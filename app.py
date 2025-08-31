@@ -1,6 +1,6 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
+# Adds: guess markers overlay (if guessed stations are inside the visible crop).
 # Calibration removed. Gameplay unchanged. Coordinates remain exact.
-# Map renders inline (no fixed-height iframe), input directly under map, suggestions below input.
 
 import base64
 import csv
@@ -144,12 +144,23 @@ def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float)
     ty = VIEW_H / 2 - cy * zoom
     return tx, ty
 
+def project_to_screen(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
+    """
+    Convert normalized fx,fy (0..1) to screen pixel coordinates in the VIEW_W x VIEW_H viewport,
+    using the same transform as the map image.
+    """
+    tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
+    x = fx * baseW * zoom + tx
+    y = fy * baseH * zoom + ty
+    return x, y
+
 def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float,
-                  zoom: float, colorize: bool, ring_color: str) -> str:
+                  zoom: float, colorize: bool, ring_color: str,
+                  overlays: Optional[List[Tuple[float, float, str, str]]] = None) -> str:
     """
     Build an inline SVG that's responsive but preserves exact pixel math.
-    We place the blank map as an <image> inside a transformed <g> and draw the center ring as an SVG circle.
-    (Rendered via st.markdown so it uses natural height; no iframe gaps.)
+    Place the blank map as an <image> inside a transformed <g>, draw the center ring,
+    and optionally render overlay markers [(x_px, y_px, color, label), ...] in viewport pixels.
     """
     tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -165,8 +176,26 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
+    # Build overlay SVG fragments
+    overlay_svg = ""
+    if overlays:
+        parts = []
+        for (sx, sy, color, label) in overlays:
+            # small halo for visibility on light/dark
+            parts.append(
+                f"""<g class="guess-marker">
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="6" fill="#fff" opacity="0.85"/>
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="4" fill="{color}" />
+                      <rect x="{sx+8:.1f}" y="{sy-12:.1f}" rx="4" ry="4"
+                            width="{max(18, 8*len(label))}" height="18"
+                            fill="rgba(0,0,0,0.65)"/>
+                      <text x="{sx+12:.1f}" y="{sy+2:.1f}" font-size="12" fill="#fff">{label}</text>
+                    </g>"""
+            )
+        overlay_svg = "\n".join(parts)
+
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 4px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -175,6 +204,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
         <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}" stroke="{ring_color}"
                 stroke-width="{RING_STROKE}" fill="none"
                 style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+        {overlay_svg}
       </svg>
     </div>
     """
@@ -183,7 +213,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
 st.markdown("# Metrodle Dupe")  # header we control (prevents clipping)
 
-# Global CSS: top padding + tight stacking
+# Global CSS: top padding + tight stacking and vertically centered input text
 st.markdown(
     """
     <style>
@@ -197,16 +227,19 @@ st.markdown(
         margin-bottom: 0.75rem;
       }
 
-      /* Map wrapper margin kept tiny; no iframe used, so no extra gaps */
-      .map-wrap { margin: 0 auto 4px auto !important; }
+      /* Map wrapper with tiny gap before the input */
+      .map-wrap { margin: 0 auto 6px auto !important; }
 
-      /* Text input centered + snug margins */
+      /* Text input centered + vertically centered text */
       .stTextInput {
-        margin-top: 0px !important;
+        margin-top: 6px !important;
         margin-bottom: 6px !important;
       }
       .stTextInput>div>div>input {
-        text-align: center; height: 44px; font-size: 1rem;
+        text-align: center;
+        height: 44px;
+        line-height: 44px;   /* vertical centering */
+        font-size: 1rem;
       }
 
       /* Suggestion buttons: touch-friendly and compact (rendered BELOW the input) */
@@ -283,11 +316,34 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Center the map (pixel-accurate inline SVG that scales responsively)
+    # Build overlays from visible guesses
+    overlays: List[Tuple[float,float,str,str]] = []
+    # transform center for distance readout
+    center_x, center_y = VIEW_W/2.0, VIEW_H/2.0
+
+    for idx, gname in enumerate(st.session_state.history, start=1):
+        st_obj = resolve_guess(gname, BY_KEY)
+        if not st_obj:
+            continue
+        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, ZOOM)
+        # keep only markers inside the viewport
+        if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
+            # distance in pixels from the center ring
+            dx, dy = sx - center_x, sy - center_y
+            dist = (dx*dx + dy*dy) ** 0.5
+            # label: "#n • Name • 123px"
+            # (shorten long names to keep badge compact)
+            short = st_obj.name if len(st_obj.name) <= 18 else st_obj.name[:16] + "…"
+            overlay_label = f"#{idx} • {short} • {int(dist)}px"
+            overlays.append((sx, sy, "#ef4444", overlay_label))  # red markers
+
+    # Center the map (pixel-accurate inline SVG that scales responsively) with overlays
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map — inline HTML, no iframe, natural height
-        st.markdown(make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring), unsafe_allow_html=True)
+        st.markdown(
+            make_map_html(SVG_URI, SVG_W, SVG_H, (answer.fx), (answer.fy), ZOOM, colorize, ring, overlays),
+            unsafe_allow_html=True
+        )
 
         if st.session_state.phase == "play":
             # Input directly under the map
