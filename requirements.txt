@@ -1,0 +1,11 @@
+# Core app framework
+streamlit>=1.33
+
+# Image handling
+Pillow>=9.0
+
+# PDF/SVG parsing (PyMuPDF is imported as "fitz")
+pymupdf>=1.23
+
+# Streamlit widget for clicking coordinates on images
+streamlit-image-coordinates>=0.1.6
