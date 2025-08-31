@@ -337,9 +337,9 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                         else:
                             if picked and same_line(picked, answer):
                                 lines = ", ".join(overlap_lines(picked, answer)) or "right line"
-                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
+                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
                             else:
-                                st.session_state["feedback"] = "❌ Wrong station."
+                                st.session_state["feedback"] = "Wrong station."
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
