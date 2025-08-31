@@ -1,5 +1,5 @@
-# Metrodle Dupe — Blank SVG Edition (Public, responsive)
-# Calibration removed for public deployment; gameplay unchanged. UI is mobile-friendly.
+# Metrodle Dupe — Blank SVG Edition (Public, fixed-viewport + responsive wrapper)
+# Calibration removed. Gameplay unchanged. Coordinates remain exact, viewport scales on mobile.
 
 import base64
 import csv
@@ -21,13 +21,11 @@ ASSETS_DIR = BASE_DIR / "maps"
 SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # blank SVG shown to users
 DB_PATH  = BASE_DIR / "stations_db.csv"               # pre-populated via your private app
 
-# -------------------- TUNING (visual only) --------------------
-# These are *bounds* for responsive sizing; the map container will clamp within them.
-MAP_MAX_W   = 980   # px (desktop max width)
-MAP_MIN_H   = 360   # px (phone min height)
-MAP_MAX_H   = 620   # px (desktop max height)
-ZOOM        = 3.0   # how much the map is zoomed into the station
-RING_PX     = 28    # ring radius in pixels (min clamp)
+# -------------------- TUNING --------------------
+# Keep this viewport fixed for *all* geometry math; we only scale the entire viewport for responsiveness.
+VIEW_W, VIEW_H = 980, 620
+ZOOM        = 3.0
+RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
@@ -137,36 +135,56 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
-# -------------------- GEOMETRY / HTML (responsive) --------------------
+# -------------------- GEOMETRY / HTML (fixed viewport; responsive wrapper) --------------------
+def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
+    # ORIGINAL pixel math based on fixed viewport — do not change.
+    cx, cy = fx * baseW, fy * baseH
+    tx = VIEW_W / 2 - cx * zoom
+    ty = VIEW_H / 2 - cy * zoom
+    return tx, ty
+
 def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float,
                   zoom: float, colorize: bool, ring_color: str) -> str:
     """
-    Responsive map container:
-      - width: min(100%, MAP_MAX_W)
-      - height: clamp(MAP_MIN_H, 62vw, MAP_MAX_H)
-    Centering uses CSS calc(50% - px) so it adapts to container size.
+    Render into a fixed VIEW_W x VIEW_H viewport (matching calibrated geometry),
+    then scale the *entire* viewport uniformly to fit smaller screens.
     """
-    # Pixel center of station in the original SVG coordinates (pre-zoom)
-    cx, cy = fx * baseW, fy * baseH
+    tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
     filt = "grayscale(0)" if colorize else "grayscale(1) brightness(1.02)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
     return f"""
-    <div style="
-      position:relative;
-      width:min(100%, {MAP_MAX_W}px);
-      height:clamp({MAP_MIN_H}px, 62vw, {MAP_MAX_H}px);
-      overflow:hidden;border-radius:14px;background:#f6f7f8;margin:0 auto;">
-      <img src="{svg_uri}"
-           style="
-              position:absolute;top:0;left:0;width:{baseW}px;height:{baseH}px;
-              transform: translate(calc(50% - {cx*zoom}px), calc(50% - {cy*zoom}px)) scale({zoom});
-              transform-origin: top left; filter:{filt};">
-      <div style="
-              position:absolute;
-              left:calc(50% - {r_px}px); top:calc(50% - {r_px}px);
-              width:{2*r_px}px;height:{2*r_px}px;border:{RING_STROKE}px solid {ring_color};
-              border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.45) inset;"></div>
+    <div
+      style="
+        /* Responsive wrapper: width shrinks on mobile; height via aspect-ratio keeps proportions */
+        width: min(100%, {VIEW_W}px);
+        aspect-ratio: {VIEW_W} / {VIEW_H};
+        position: relative;
+        margin: 0 auto;
+        overflow: hidden;
+        border-radius: 14px;
+        background: #f6f7f8;
+        /* Scale factor 's' = wrapper_width / VIEW_W */
+        --s: calc(100% / {VIEW_W}px);
+      "
+    >
+      <!-- Fixed-size viewport scaled by --s so geometry stays exact -->
+      <div
+        style="
+          position: absolute; inset: 0;
+          width: {VIEW_W}px; height: {VIEW_H}px;
+          transform: scale(var(--s));
+          transform-origin: top left;
+        "
+      >
+        <img src="{svg_uri}"
+             style="position:absolute;top:0;left:0;width:{baseW}px;height:{baseH}px;
+                    transform: translate({tx}px,{ty}px) scale({zoom});
+                    transform-origin: top left; filter:{filt};" />
+        <div style="position:absolute;left:{VIEW_W/2 - r_px}px;top:{VIEW_H/2 - r_px}px;
+                    width:{2*r_px}px;height:{2*r_px}px;border:{RING_STROKE}px solid {ring_color};
+                    border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.45) inset;"></div>
+      </div>
     </div>
     """
 
@@ -174,30 +192,20 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 st.set_page_config(page_title="Metrodle — Blank SVG", page_icon="🗺️", layout="wide")
 st.title("Metrodle — Blank SVG Edition")
 
-# Global CSS: tighten layout on mobile, larger touch targets
+# Global CSS: mobile-friendly inputs/buttons
 st.markdown(
-    f"""
+    """
     <style>
-      /* Make central column narrower on large screens, full on mobile */
-      .block-container {{ max-width: 1100px; padding-top: 0.5rem; }}
-      /* Center text inputs, larger touch-friendly height */
-      .stTextInput>div>div>input {{
-        text-align: center;
-        height: 44px;
-        font-size: 1rem;
-      }}
-      /* Suggestion buttons: touch-friendly */
-      .sugg-list .stButton>button {{
-        min-height: 44px;
-        font-size: 1rem;
-        border-radius: 10px;
-      }}
-      /* Play-again button bigger */
-      .play-again .stButton>button {{
-        font-size: 1.05rem;
-        padding: 12px 22px;
-        border-radius: 10px;
-      }}
+      .block-container { max-width: 1100px; padding-top: 0.5rem; }
+      .stTextInput>div>div>input {
+        text-align: center; height: 44px; font-size: 1rem;
+      }
+      .sugg-list .stButton>button {
+        min-height: 44px; font-size: 1rem; border-radius: 10px;
+      }
+      .play-again .stButton>button {
+        font-size: 1.05rem; padding: 12px 22px; border-radius: 10px;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -265,22 +273,14 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Center the map (responsive container)
+    # Center the map (fixed viewport inside responsive wrapper)
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize=colorize, ring_color=ring)
-        st.components.v1.html(html, height=MAP_MAX_H, scrolling=False)  # height is max; CSS clamps smaller on mobile
+        st.components.v1.html(html, height=VIEW_H, scrolling=False)
 
         if st.session_state.phase == "play":
-            # ---------- Styles for suggestions ----------
-            st.markdown(
-                """
-                <style>
-                  .sugg-list {max-width: 540px; margin: 10px auto 6px auto;}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
 
             # Suggestions ABOVE the input but computed AFTER the input
             suggestions_box = st.container()
@@ -300,7 +300,6 @@ if st.session_state.phase in ("play", "end") and STATIONS:
             with suggestions_box:
                 sugg = prefix_suggestions(q, NAMES, limit=5)
                 if sugg:
-                    st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
                     for s in sugg:
                         if st.button(s, key=f"sugg_{s}", use_container_width=True):
                             st.session_state.history.append(s)
@@ -320,7 +319,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                                     st.session_state.won = False
                                     st.session_state.phase = "end"
                             st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
             # Show feedback while still playing
             if st.session_state.get("feedback"):
@@ -333,14 +332,6 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     # End-screen messaging
     if st.session_state.phase == "end":
-        st.markdown(
-            """
-            <style>
-              .play-again .stButton>button { min-height: 48px; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
         _l, c, _r = st.columns([1,1,1])
         with c:
             if st.session_state.won:
