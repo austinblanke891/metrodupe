@@ -1,5 +1,5 @@
-# Metrodle Dupe — Blank SVG Edition (Public, pixel-accurate & responsive via inline SVG)
-# Calibration removed. Gameplay unchanged. Coordinates remain exact while the SVG scales fluidly.
+# Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG)
+# Calibration removed. Gameplay unchanged. Coordinates remain exact; spacing tightened for mobile.
 
 import base64
 import csv
@@ -152,7 +152,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
-    # Optional grayscale filter (keeps things crisp and avoids CSS transform hacks)
     gray_filter = """
       <filter id="gray">
         <feColorMatrix type="matrix"
@@ -162,12 +161,10 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
                   0      0      0      1 0"/>
       </filter>
     """
-
-    # Apply filter only when not colorized
     image_style = 'filter:url(#gray);' if not colorize else ''
 
     return f"""
-    <div style="width:min(100%, {VIEW_W}px); margin:0 auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -181,20 +178,36 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     """
 
 # -------------------- STREAMLIT APP --------------------
-st.set_page_config(page_title="Metrodle — Blank SVG", page_icon="🗺️", layout="wide")
-st.title("Metrodle — Blank SVG Edition")
+st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
+st.title("Metrodle Dupe")
 
-# Global CSS: mobile-friendly inputs/buttons
+# Global CSS: fix top padding (no clipped title) + tighter vertical rhythm on mobile
 st.markdown(
     """
     <style>
-      .block-container { max-width: 1100px; padding-top: 0.5rem; }
+      .block-container {
+        max-width: 1100px;
+        padding-top: 1.25rem;      /* more than before so title isn't clipped */
+        padding-bottom: 1rem;
+      }
+      @media (max-width: 640px) {
+        .block-container { padding-top: 1.5rem; } /* comfy on phones */
+      }
+      /* Reduce gap under the map iframe wrapper Streamlit uses */
+      .stComponent iframe { margin-bottom: 0 !important; }
+      /* Input box centered + tighter spacing */
+      .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; font-size: 1rem;
       }
+      /* Suggestion buttons: touch-friendly and compact */
       .sugg-list .stButton>button {
         min-height: 44px; font-size: 1rem; border-radius: 10px;
+        margin-bottom: 6px;
       }
+      /* Pull guesses/history closer to input */
+      .post-input { margin-top: 6px; }
+      /* Play-again button bigger */
       .play-again .stButton>button {
         font-size: 1.05rem; padding: 12px 22px; border-radius: 10px;
       }
@@ -202,12 +215,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-with st.expander("Diagnostics", expanded=False):
-    st.write("Python executable:", sys.executable)
-    st.write("SVG exists:", SVG_PATH.exists())
-    st.write("DB exists:", DB_PATH.exists())
-    st.write("DB path:", str(DB_PATH))
 
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
@@ -225,7 +232,7 @@ if "guess_text" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""     # feedback message for wrong guesses
 
-# Mode selector
+# Mode selector (kept simple)
 c1, _, _ = st.columns([1,1,1])
 with c1:
     st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
@@ -269,7 +276,6 @@ if st.session_state.phase in ("play", "end") and STATIONS:
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize=colorize, ring_color=ring)
-        # Height can be anything ≥ the natural height; let the responsive SVG determine its own height.
         st.components.v1.html(html, height=VIEW_H, scrolling=False)
 
         if st.session_state.phase == "play":
@@ -318,10 +324,12 @@ if st.session_state.phase in ("play", "end") and STATIONS:
             if st.session_state.get("feedback"):
                 st.info(st.session_state["feedback"])
 
-        # History / status
-        if st.session_state.history:
-            st.markdown("**Your guesses:** " + ", ".join(st.session_state.history))
-        st.caption(f"Guesses left: {st.session_state.remaining}")
+        # History / status (pulled closer by .post-input class CSS)
+        post = st.container()
+        with post:
+            if st.session_state.history:
+                st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
+            st.caption(f"Guesses left: {st.session_state.remaining}")
 
     # End-screen messaging
     if st.session_state.phase == "end":
