@@ -1,6 +1,6 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Adds: guess markers overlay (if guessed stations are inside the visible crop).
-# Calibration removed. Gameplay unchanged. Coordinates remain exact.
+# Fix: guess markers now project into the viewport using the ANSWER transform.
+# UI: markers are larger, translucent circles (no pill labels); input below map; suggestions below input.
 
 import base64
 import csv
@@ -18,13 +18,11 @@ import streamlit as st
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # blank SVG shown to users
-DB_PATH  = BASE_DIR / "stations_db.csv"               # pre-populated via your private app
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG shown to users
+DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-populated via your private app
 
 # -------------------- TUNING --------------------
-# Keep this viewport fixed for geometry; the surrounding <svg> scales responsively.
-VIEW_W, VIEW_H = 980, 620
+VIEW_W, VIEW_H = 980, 620        # fixed geometry viewport
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -108,7 +106,6 @@ def overlap_lines(a: Station, b: Station) -> List[str]:
     return sorted(list(set(a.lines) & set(b.lines)))
 
 def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
-    """First `limit` station names that START WITH the typed text (case-insensitive)."""
     q = (q or "").strip().lower()
     if not q:
         return []
@@ -118,7 +115,6 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
-    """Return (data_uri, baseW, baseH) for the blank map SVG; infer size from viewBox/width/height."""
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -137,32 +133,34 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
 # -------------------- GEOMETRY / SVG RENDER --------------------
-def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
-    # Pixel math based on the fixed viewport — this matches your calibrated CSV.
-    cx, cy = fx * baseW, fy * baseH
+def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
+    """Translate/scale to center the ANSWER at viewport center."""
+    cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
     return tx, ty
 
-def project_to_screen(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
+def project_to_screen(baseW: float, baseH: float,
+                      fx_target: float, fy_target: float,
+                      fx_center: float, fy_center: float,
+                      zoom: float) -> Tuple[float, float]:
     """
-    Convert normalized fx,fy (0..1) to screen pixel coordinates in the VIEW_W x VIEW_H viewport,
-    using the same transform as the map image.
+    Project an arbitrary station (fx_target, fy_target) into the current viewport that
+    is centered on (fx_center, fy_center).
     """
-    tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
-    x = fx * baseW * zoom + tx
-    y = fy * baseH * zoom + ty
+    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    x = fx_target * baseW * zoom + tx
+    y = fy_target * baseH * zoom + ty
     return x, y
 
-def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float,
+def make_map_html(svg_uri: str, baseW: float, baseH: float,
+                  fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, str]]] = None) -> str:
+                  overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Build an inline SVG that's responsive but preserves exact pixel math.
-    Place the blank map as an <image> inside a transformed <g>, draw the center ring,
-    and optionally render overlay markers [(x_px, y_px, color, label), ...] in viewport pixels.
+    Inline SVG for the crop. Overlays are tuples: (x_px, y_px, color, radius_px).
     """
-    tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
+    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
     gray_filter = """
@@ -176,20 +174,16 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
-    # Build overlay SVG fragments
+    # Build overlay SVG fragments (bigger translucent circles)
     overlay_svg = ""
     if overlays:
         parts = []
-        for (sx, sy, color, label) in overlays:
-            # small halo for visibility on light/dark
+        for (sx, sy, color, rr) in overlays:
             parts.append(
                 f"""<g class="guess-marker">
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="6" fill="#fff" opacity="0.85"/>
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="4" fill="{color}" />
-                      <rect x="{sx+8:.1f}" y="{sy-12:.1f}" rx="4" ry="4"
-                            width="{max(18, 8*len(label))}" height="18"
-                            fill="rgba(0,0,0,0.65)"/>
-                      <text x="{sx+12:.1f}" y="{sy+2:.1f}" font-size="12" fill="#fff">{label}</text>
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
+                              fill="{color}" fill-opacity="0.28"
+                              stroke="{color}" stroke-width="2" />
                     </g>"""
             )
         overlay_svg = "\n".join(parts)
@@ -211,47 +205,32 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
-st.markdown("# Metrodle Dupe")  # header we control (prevents clipping)
+st.markdown("# Metrodle Dupe")
 
-# Global CSS: top padding + tight stacking and vertically centered input text
+# Global CSS: tidy stacking + vertically centered input text
 st.markdown(
     """
     <style>
       .block-container {
         max-width: 1100px;
-        padding-top: 2.0rem;    /* ensure title isn't clipped */
+        padding-top: 2.0rem;
         padding-bottom: 1rem;
       }
-      .block-container h1:first-of-type {
-        margin-top: 0;
-        margin-bottom: 0.75rem;
-      }
+      .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
-      /* Map wrapper with tiny gap before the input */
       .map-wrap { margin: 0 auto 6px auto !important; }
 
-      /* Text input centered + vertically centered text */
-      .stTextInput {
-        margin-top: 6px !important;
-        margin-bottom: 6px !important;
-      }
+      .stTextInput { margin-top: 6px !important; margin-bottom: 6px !important; }
       .stTextInput>div>div>input {
-        text-align: center;
-        height: 44px;
-        line-height: 44px;   /* vertical centering */
-        font-size: 1rem;
+        text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
 
-      /* Suggestion buttons: touch-friendly and compact (rendered BELOW the input) */
       .sugg-list .stButton>button {
-        min-height: 44px; font-size: 1rem; border-radius: 10px;
-        margin-bottom: 6px;
+        min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px;
       }
 
-      /* History block closer to input */
       .post-input { margin-top: 6px; }
 
-      /* Play-again button bigger */
       .play-again .stButton>button {
         font-size: 1.05rem; padding: 12px 22px; border-radius: 10px;
       }
@@ -263,7 +242,7 @@ st.markdown(
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
-# session state
+# Session state
 if "phase" not in st.session_state:
     st.session_state.phase="start"
     st.session_state.mode="daily"
@@ -272,11 +251,11 @@ if "phase" not in st.session_state:
     st.session_state.history=[]
     st.session_state.won=False
 if "guess_text" not in st.session_state:
-    st.session_state["guess_text"] = ""   # filter box contents
+    st.session_state["guess_text"] = ""
 if "feedback" not in st.session_state:
-    st.session_state["feedback"] = ""     # feedback message for wrong guesses
+    st.session_state["feedback"] = ""
 
-# Mode selector (kept simple)
+# Mode
 c1, _, _ = st.columns([1,1,1])
 with c1:
     st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
@@ -316,45 +295,33 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build overlays from visible guesses
-    overlays: List[Tuple[float,float,str,str]] = []
-    # transform center for distance readout
-    center_x, center_y = VIEW_W/2.0, VIEW_H/2.0
-
-    for idx, gname in enumerate(st.session_state.history, start=1):
+    # Build translucent circle overlays for visible guesses (project using ANSWER as center!)
+    overlays: List[Tuple[float,float,str,float]] = []
+    for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj:
             continue
-        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, ZOOM)
-        # keep only markers inside the viewport
+        sx, sy = project_to_screen(SVG_W, SVG_H,
+                                   st_obj.fx, st_obj.fy,
+                                   answer.fx, answer.fy,
+                                   ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            # distance in pixels from the center ring
-            dx, dy = sx - center_x, sy - center_y
-            dist = (dx*dx + dy*dy) ** 0.5
-            # label: "#n • Name • 123px"
-            # (shorten long names to keep badge compact)
-            short = st_obj.name if len(st_obj.name) <= 18 else st_obj.name[:16] + "…"
-            overlay_label = f"#{idx} • {short} • {int(dist)}px"
-            overlays.append((sx, sy, "#ef4444", overlay_label))  # red markers
+            overlays.append((sx, sy, "#ef4444", 10.0))  # larger, translucent red circles
 
-    # Center the map (pixel-accurate inline SVG that scales responsively) with overlays
+    # Map with overlays
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         st.markdown(
-            make_map_html(SVG_URI, SVG_W, SVG_H, (answer.fx), (answer.fy), ZOOM, colorize, ring, overlays),
+            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
         if st.session_state.phase == "play":
-            # Input directly under the map
-            q_now = st.text_input(
-                "Type to search stations",
-                key="guess_text",
-                placeholder="Start typing…",
-                label_visibility="collapsed"
-            )
+            q_now = st.text_input("Type to search stations",
+                                  key="guess_text",
+                                  placeholder="Start typing…",
+                                  label_visibility="collapsed")
 
-            # Suggestions BELOW the input
             sugg = prefix_suggestions(q_now, NAMES, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
@@ -379,18 +346,15 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Feedback while playing
             if st.session_state.get("feedback"):
                 st.info(st.session_state["feedback"])
 
-        # History / status
         post = st.container()
         with post:
             if st.session_state.history:
                 st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
             st.caption(f"Guesses left: {st.session_state.remaining}")
 
-    # End-screen messaging
     if st.session_state.phase == "end":
         _l, c, _r = st.columns([1,1,1])
         with c:
