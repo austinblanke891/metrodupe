@@ -1,5 +1,5 @@
-# Metrodle Dupe — Blank SVG Edition (Public, fixed-viewport + responsive wrapper)
-# Calibration removed. Gameplay unchanged. Coordinates remain exact, viewport scales on mobile.
+# Metrodle Dupe — Blank SVG Edition (Public, pixel-accurate & responsive via inline SVG)
+# Calibration removed. Gameplay unchanged. Coordinates remain exact while the SVG scales fluidly.
 
 import base64
 import csv
@@ -22,7 +22,7 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"          # blank SVG shown to users
 DB_PATH  = BASE_DIR / "stations_db.csv"               # pre-populated via your private app
 
 # -------------------- TUNING --------------------
-# Keep this viewport fixed for *all* geometry math; we only scale the entire viewport for responsiveness.
+# Keep this viewport fixed for geometry; the surrounding <svg> scales responsively.
 VIEW_W, VIEW_H = 980, 620
 ZOOM        = 3.0
 RING_PX     = 28
@@ -117,7 +117,7 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
-    """Return (data_uri, baseW, baseH) for SVG; infer size from viewBox/width/height."""
+    """Return (data_uri, baseW, baseH) for the blank map SVG; infer size from viewBox/width/height."""
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -135,9 +135,9 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
-# -------------------- GEOMETRY / HTML (fixed viewport; responsive wrapper) --------------------
+# -------------------- GEOMETRY / SVG RENDER --------------------
 def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float) -> Tuple[float, float]:
-    # ORIGINAL pixel math based on fixed viewport — do not change.
+    # Pixel math based on the fixed viewport — this matches your calibrated CSV.
     cx, cy = fx * baseW, fy * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -146,45 +146,37 @@ def css_transform(baseW: float, baseH: float, fx: float, fy: float, zoom: float)
 def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float,
                   zoom: float, colorize: bool, ring_color: str) -> str:
     """
-    Render into a fixed VIEW_W x VIEW_H viewport (matching calibrated geometry),
-    then scale the *entire* viewport uniformly to fit smaller screens.
+    Build an inline SVG that's responsive but preserves exact pixel math.
+    We place the blank map as an <image> inside a transformed <g> and draw the center ring as an SVG circle.
     """
     tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
-    filt = "grayscale(0)" if colorize else "grayscale(1) brightness(1.02)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
+    # Optional grayscale filter (keeps things crisp and avoids CSS transform hacks)
+    gray_filter = """
+      <filter id="gray">
+        <feColorMatrix type="matrix"
+          values="0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0      0      0      1 0"/>
+      </filter>
+    """
+
+    # Apply filter only when not colorized
+    image_style = 'filter:url(#gray);' if not colorize else ''
+
     return f"""
-    <div
-      style="
-        /* Responsive wrapper: width shrinks on mobile; height via aspect-ratio keeps proportions */
-        width: min(100%, {VIEW_W}px);
-        aspect-ratio: {VIEW_W} / {VIEW_H};
-        position: relative;
-        margin: 0 auto;
-        overflow: hidden;
-        border-radius: 14px;
-        background: #f6f7f8;
-        /* Scale factor 's' = wrapper_width / VIEW_W */
-        --s: calc(100% / {VIEW_W}px);
-      "
-    >
-      <!-- Fixed-size viewport scaled by --s so geometry stays exact -->
-      <div
-        style="
-          position: absolute; inset: 0;
-          width: {VIEW_W}px; height: {VIEW_H}px;
-          transform: scale(var(--s));
-          transform-origin: top left;
-        "
-      >
-        <img src="{svg_uri}"
-             style="position:absolute;top:0;left:0;width:{baseW}px;height:{baseH}px;
-                    transform: translate({tx}px,{ty}px) scale({zoom});
-                    transform-origin: top left; filter:{filt};" />
-        <div style="position:absolute;left:{VIEW_W/2 - r_px}px;top:{VIEW_H/2 - r_px}px;
-                    width:{2*r_px}px;height:{2*r_px}px;border:{RING_STROKE}px solid {ring_color};
-                    border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.45) inset;"></div>
-      </div>
+    <div style="width:min(100%, {VIEW_W}px); margin:0 auto;">
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
+        <defs>{gray_filter}</defs>
+        <g transform="translate({tx},{ty}) scale({zoom})">
+          <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
+        </g>
+        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}" stroke="{ring_color}"
+                stroke-width="{RING_STROKE}" fill="none"
+                style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+      </svg>
     </div>
     """
 
@@ -273,10 +265,11 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Center the map (fixed viewport inside responsive wrapper)
+    # Center the map (pixel-accurate inline SVG that scales responsively)
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize=colorize, ring_color=ring)
+        # Height can be anything ≥ the natural height; let the responsive SVG determine its own height.
         st.components.v1.html(html, height=VIEW_H, scrolling=False)
 
         if st.session_state.phase == "play":
