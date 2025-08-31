@@ -1,5 +1,6 @@
-# Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG)
-# Calibration removed. Gameplay unchanged. Coordinates remain exact; spacing tightened for mobile.
+# Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
+# Calibration removed. Gameplay unchanged. Coordinates remain exact.
+# Map renders inline (no fixed-height iframe), input directly under map, suggestions below input.
 
 import base64
 import csv
@@ -148,6 +149,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     """
     Build an inline SVG that's responsive but preserves exact pixel math.
     We place the blank map as an <image> inside a transformed <g> and draw the center ring as an SVG circle.
+    (Rendered via st.markdown so it uses natural height; no iframe gaps.)
     """
     tx, ty = css_transform(baseW, baseH, fx, fy, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -164,7 +166,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     image_style = 'filter:url(#gray);' if not colorize else ''
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 2px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 4px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -181,13 +183,13 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
 st.markdown("# Metrodle Dupe")  # header we control (prevents clipping)
 
-# Global CSS: top padding + extra-tight map→input spacing (mobile friendly)
+# Global CSS: top padding + tight stacking
 st.markdown(
     """
     <style>
       .block-container {
         max-width: 1100px;
-        padding-top: 2.0rem;     /* ensure title isn't clipped */
+        padding-top: 2.0rem;    /* ensure title isn't clipped */
         padding-bottom: 1rem;
       }
       .block-container h1:first-of-type {
@@ -195,13 +197,10 @@ st.markdown(
         margin-bottom: 0.75rem;
       }
 
-      /* Map wrapper closer to following elements */
-      .map-wrap { margin: 0 auto 2px auto !important; }
+      /* Map wrapper margin kept tiny; no iframe used, so no extra gaps */
+      .map-wrap { margin: 0 auto 4px auto !important; }
 
-      /* Remove default gap Streamlit adds under the map iframe */
-      .stComponent iframe { margin-bottom: 0 !important; }
-
-      /* Text input centered + zero top margin to tuck under map */
+      /* Text input centered + snug margins */
       .stTextInput {
         margin-top: 0px !important;
         margin-bottom: 6px !important;
@@ -210,7 +209,7 @@ st.markdown(
         text-align: center; height: 44px; font-size: 1rem;
       }
 
-      /* Suggestion buttons: touch-friendly and compact */
+      /* Suggestion buttons: touch-friendly and compact (rendered BELOW the input) */
       .sugg-list .stButton>button {
         min-height: 44px; font-size: 1rem; border-radius: 10px;
         margin-bottom: 6px;
@@ -287,18 +286,23 @@ if st.session_state.phase in ("play", "end") and STATIONS:
     # Center the map (pixel-accurate inline SVG that scales responsively)
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize=colorize, ring_color=ring)
-        st.components.v1.html(html, height=VIEW_H, scrolling=False)
+        # Map — inline HTML, no iframe, natural height
+        st.markdown(make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring), unsafe_allow_html=True)
 
         if st.session_state.phase == "play":
-            # Compute suggestions from current text (no placeholder that adds height)
-            q_now = st.session_state.get("guess_text", "")
-            suggestions = prefix_suggestions(q_now, NAMES, limit=5)
+            # Input directly under the map
+            q_now = st.text_input(
+                "Type to search stations",
+                key="guess_text",
+                placeholder="Start typing…",
+                label_visibility="collapsed"
+            )
 
-            # Show suggestions (if any) tightly above the input
-            if suggestions:
+            # Suggestions BELOW the input
+            sugg = prefix_suggestions(q_now, NAMES, limit=5)
+            if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
-                for s in suggestions:
+                for s in sugg:
                     if st.button(s, key=f"sugg_{s}", use_container_width=True):
                         st.session_state.history.append(s)
                         st.session_state.remaining -= 1
@@ -319,19 +323,11 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Text input acts only as a filter; user cannot submit from it
-            st.text_input(
-                "Type to search stations",
-                key="guess_text",
-                placeholder="Start typing…",
-                label_visibility="collapsed"
-            )
-
-            # Show feedback while still playing
+            # Feedback while playing
             if st.session_state.get("feedback"):
                 st.info(st.session_state["feedback"])
 
-        # History / status (pulled closer by .post-input class CSS)
+        # History / status
         post = st.container()
         with post:
             if st.session_state.history:
