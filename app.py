@@ -164,7 +164,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     image_style = 'filter:url(#gray);' if not colorize else ''
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -179,24 +179,25 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
-st.title("Metrodle Dupe")
+st.markdown("# Metrodle Dupe")  # use markdown header so we control spacing
 
-# Global CSS: fix top padding (no clipped title) + tighter vertical rhythm on mobile
+# Global CSS: fix top padding + tighter vertical rhythm (esp. under the map)
 st.markdown(
     """
     <style>
       .block-container {
         max-width: 1100px;
-        padding-top: 1.25rem;      /* more than before so title isn't clipped */
+        padding-top: 2.0rem;     /* ensure title isn't clipped */
         padding-bottom: 1rem;
       }
-      @media (max-width: 640px) {
-        .block-container { padding-top: 1.5rem; } /* comfy on phones */
+      .block-container h1:first-of-type {
+        margin-top: 0;           /* don't add extra gap above the H1 */
+        margin-bottom: 0.75rem;
       }
-      /* Reduce gap under the map iframe wrapper Streamlit uses */
+      /* Remove extra gap Streamlit adds under the map iframe */
       .stComponent iframe { margin-bottom: 0 !important; }
-      /* Input box centered + tighter spacing */
-      .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
+      /* Input box centered + tight margins */
+      .stTextInput { margin-top: 6px !important; margin-bottom: 8px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; font-size: 1rem;
       }
@@ -205,7 +206,7 @@ st.markdown(
         min-height: 44px; font-size: 1rem; border-radius: 10px;
         margin-bottom: 6px;
       }
-      /* Pull guesses/history closer to input */
+      /* History block closer to input */
       .post-input { margin-top: 6px; }
       /* Play-again button bigger */
       .play-again .stButton>button {
@@ -279,46 +280,41 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         st.components.v1.html(html, height=VIEW_H, scrolling=False)
 
         if st.session_state.phase == "play":
-            st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
+            # --- Compute suggestions *before* rendering input (so no empty placeholder adds height) ---
+            q_now = st.session_state.get("guess_text", "")
+            suggestions = prefix_suggestions(q_now, NAMES, limit=5)
 
-            # Suggestions ABOVE the input but computed AFTER the input
-            suggestions_box = st.container()
-
-            if "guess_text" not in st.session_state:
-                st.session_state["guess_text"] = ""
+            # Show suggestions (if any) tightly above the input
+            if suggestions:
+                st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
+                for s in suggestions:
+                    if st.button(s, key=f"sugg_{s}", use_container_width=True):
+                        st.session_state.history.append(s)
+                        st.session_state.remaining -= 1
+                        picked = resolve_guess(s, BY_KEY)
+                        if picked and picked.key == answer.key:
+                            st.session_state.won = True
+                            st.session_state.phase = "end"
+                            st.session_state["feedback"] = ""
+                        else:
+                            if picked and same_line(picked, answer):
+                                lines = ", ".join(overlap_lines(picked, answer)) or "right line"
+                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
+                            else:
+                                st.session_state["feedback"] = "❌ Wrong station."
+                            if st.session_state.remaining <= 0:
+                                st.session_state.won = False
+                                st.session_state.phase = "end"
+                        st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
             # Text input acts only as a filter; user cannot submit from it
-            q = st.text_input(
+            st.text_input(
                 "Type to search stations",
                 key="guess_text",
                 placeholder="Start typing…",
                 label_visibility="collapsed"
             )
-
-            # Render suggestions (above the input) via placeholder
-            with suggestions_box:
-                sugg = prefix_suggestions(q, NAMES, limit=5)
-                if sugg:
-                    for s in sugg:
-                        if st.button(s, key=f"sugg_{s}", use_container_width=True):
-                            st.session_state.history.append(s)
-                            st.session_state.remaining -= 1
-                            picked = resolve_guess(s, BY_KEY)
-                            if picked and picked.key == answer.key:
-                                st.session_state.won = True
-                                st.session_state.phase = "end"
-                                st.session_state["feedback"] = ""
-                            else:
-                                if picked and same_line(picked, answer):
-                                    lines = ", ".join(overlap_lines(picked, answer)) or "right line"
-                                    st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
-                                else:
-                                    st.session_state["feedback"] = "❌ Wrong station."
-                                if st.session_state.remaining <= 0:
-                                    st.session_state.won = False
-                                    st.session_state.phase = "end"
-                            st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
 
             # Show feedback while still playing
             if st.session_state.get("feedback"):
