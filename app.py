@@ -164,7 +164,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
     image_style = 'filter:url(#gray);' if not colorize else ''
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 2px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -179,9 +179,9 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float, fx: float, fy: float
 
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
-st.markdown("# Metrodle Dupe")  # use markdown header so we control spacing
+st.markdown("# Metrodle Dupe")  # header we control (prevents clipping)
 
-# Global CSS: fix top padding + tighter vertical rhythm (esp. under the map)
+# Global CSS: top padding + extra-tight map→input spacing (mobile friendly)
 st.markdown(
     """
     <style>
@@ -191,23 +191,34 @@ st.markdown(
         padding-bottom: 1rem;
       }
       .block-container h1:first-of-type {
-        margin-top: 0;           /* don't add extra gap above the H1 */
+        margin-top: 0;
         margin-bottom: 0.75rem;
       }
-      /* Remove extra gap Streamlit adds under the map iframe */
+
+      /* Map wrapper closer to following elements */
+      .map-wrap { margin: 0 auto 2px auto !important; }
+
+      /* Remove default gap Streamlit adds under the map iframe */
       .stComponent iframe { margin-bottom: 0 !important; }
-      /* Input box centered + tight margins */
-      .stTextInput { margin-top: 6px !important; margin-bottom: 8px !important; }
+
+      /* Text input centered + zero top margin to tuck under map */
+      .stTextInput {
+        margin-top: 0px !important;
+        margin-bottom: 6px !important;
+      }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; font-size: 1rem;
       }
+
       /* Suggestion buttons: touch-friendly and compact */
       .sugg-list .stButton>button {
         min-height: 44px; font-size: 1rem; border-radius: 10px;
         margin-bottom: 6px;
       }
+
       /* History block closer to input */
       .post-input { margin-top: 6px; }
+
       /* Play-again button bigger */
       .play-again .stButton>button {
         font-size: 1.05rem; padding: 12px 22px; border-radius: 10px;
@@ -280,7 +291,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         st.components.v1.html(html, height=VIEW_H, scrolling=False)
 
         if st.session_state.phase == "play":
-            # --- Compute suggestions *before* rendering input (so no empty placeholder adds height) ---
+            # Compute suggestions from current text (no placeholder that adds height)
             q_now = st.session_state.get("guess_text", "")
             suggestions = prefix_suggestions(q_now, NAMES, limit=5)
 
