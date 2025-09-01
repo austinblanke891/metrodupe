@@ -1,6 +1,6 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Live suggestions (no "Press Enter"), big translucent markers (r=30), hide marker on correct.
-# Amber = same line as answer; Red = different line. Calibration removed.
+# Live suggestions on each keystroke (no "Press Enter" banner), big translucent markers (r=30),
+# amber for same line, red otherwise, hidden for correct guess. Calibration removed.
 
 import base64
 import csv
@@ -20,7 +20,7 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG shown to users
 DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-populated via your private app
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # fixed geometry viewport (used for transforms)
+VIEW_W, VIEW_H = 980, 620
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -202,7 +202,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
 st.markdown("# Metrodle Dupe")
 
-# Global CSS: tidy stacking + vertically centered input text
+# Global CSS
 st.markdown(
     """
     <style>
@@ -231,7 +231,7 @@ st.markdown(
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
-# Session state (no programmatic writes to the input value to keep live updates)
+# Session state (note: we do NOT manage the text input via session_state)
 if "phase" not in st.session_state:
     st.session_state.phase="start"
     st.session_state.mode="daily"
@@ -259,7 +259,6 @@ def start_round() -> bool:
     st.session_state.remaining=MAX_GUESSES
     st.session_state.won=False
     st.session_state["feedback"] = ""
-    # IMPORTANT: do NOT write to the text input's session_state here
     rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
     choice_name = rng.choice(NAMES)
     st.session_state.answer = BY_KEY[norm(choice_name)]
@@ -295,7 +294,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                                    ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))  # radius 30 (≈3× diameter)
+            overlays.append((sx, sy, color, 30.0))  # radius 30
 
     # Map with overlays
     _L, mid, _R = st.columns([1,2,1])
@@ -306,10 +305,9 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         )
 
         if st.session_state.phase == "play":
-            # LIVE suggestions: let the widget manage its own state (no programmatic writes)
+            # IMPORTANT: no key here, and we never write to this widget -> live updates every keystroke
             q_now = st.text_input(
                 "Type to search stations",
-                key="guess_box",
                 placeholder="Start typing…",
                 label_visibility="collapsed"
             )
@@ -329,9 +327,9 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                         else:
                             if picked and same_line(picked, answer):
                                 lines = ", ".join(overlap_lines(picked, answer)) or "right line"
-                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
+                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
                             else:
-                                st.session_state["feedback"] = "Wrong station."
+                                st.session_state["feedback"] = "❌ Wrong station."
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
