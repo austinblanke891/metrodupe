@@ -1,4 +1,4 @@
-# Tube Guessr — classic tight layout (map + guess directly), fragment polyfill, caching
+# Tube Guessr — safe map render (no DOM error), guess bar right under map, fragment polyfill & caching
 
 import base64
 import csv
@@ -10,29 +10,42 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+from streamlit import components
 
-# ---------- fragment polyfill (works on older/newer Streamlit) ----------
+# ---------- fragment polyfill ----------
 try:
-    st_fragment = st.fragment          # recent
+    st_fragment = st.fragment
 except AttributeError:
     try:
-        st_fragment = st.experimental_fragment  # slightly older
+        st_fragment = st.experimental_fragment
     except AttributeError:
-        def st_fragment(func=None, **kwargs):   # no-op for very old
+        def st_fragment(func=None, **kwargs):
             if func is None:
                 def _wrap(f): return f
                 return _wrap
             return func
-# -----------------------------------------------------------------------
+# ---------------------------------------
+
+# ---------- robust HTML render (st.html when available, else components.html) ----------
+def render_html(html: str, *, height: int):
+    """Render raw HTML safely and consistently across Streamlit versions."""
+    try:
+        if hasattr(st, "html") and callable(getattr(st, "html")):
+            # 'body' keyword works across minor st.html variants
+            st.html(body=html, height=height, scrolling=False)  # type: ignore[call-arg]
+            return
+    except Exception:
+        pass
+    components.v1.html(html, height=height, scrolling=False)
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"   # Fallback if not served via /static
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"
 DB_PATH  = BASE_DIR / "stations_db.csv"
 
-# Optional: enable static serving (.streamlit/config.toml -> enableStaticServing=true)
-STATIC_SVG_URL = "/static/tube_map_clean.svg"  # put svg at .streamlit/static/tube_map_clean.svg
+# Optional static path (enable in .streamlit/config.toml: enableStaticServing = true)
+STATIC_SVG_URL = "/static/tube_map_clean.svg"
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -41,19 +54,18 @@ RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
-# -------------------- STYLES (tight spacing like your original) --------------------
+# -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: .6rem; }
+  .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: 0.6rem; }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* no card borders */
   .stForm, .stContainer { border: none !important; box-shadow: none !important; }
 
-  /* radios */
+  /* Radios */
   div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
 
-  /* buttons */
+  /* Primary buttons */
   .stButton>button {
     min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
     background: #2563eb; color: #fff; border: none;
@@ -62,21 +74,19 @@ GLOBAL_CSS = """
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
-  /* map wrapper: minimal bottom gap */
-  .map-wrap { margin: 0 auto 2px auto !important; }
+  /* Map wrapper: zero bottom gap */
+  .map-wrap { margin: 0 auto 0 auto !important; }
 
-  /* guess input directly under map */
+  /* Kill any extra spacing under the iframe used by components.html */
+  [data-testid="stIFrame"] { margin: 0 !important; padding: 0 !important; display: block; }
+
+  /* Guess input sits snug under map */
   .stTextInput { margin-top: 0 !important; margin-bottom: 2px !important; }
   .stTextInput>div>div>input {
-    text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
-    border-radius: 10px;
+    text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
   }
 
-  /* suggestion pills */
-  .sugg-list .stButton>button {
-    min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%;
-  }
-
+  .sugg-list .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%; }
   .post-input { margin-top: 6px; font-size: .95rem; }
 </style>
 """
@@ -223,21 +233,25 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     image_style = '' if colorize else 'filter:url(#gray);'
 
-    overlay_svg = ""
     if overlays:
-        overlay_svg = "\n".join(
-            f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" '
-            f'fill-opacity="0.28" stroke="{color}" stroke-width="2" /></g>'
+        parts = [
+            f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
+            f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" /></g>'
             for (sx, sy, color, rr) in overlays
-        )
+        ]
+        overlay_svg = "\n".join(parts)
+    else:
+        overlay_svg = ""
 
-    # IMPORTANT: very small bottom margin in wrapper to keep input snug
+    # Wrapper has zero bottom margin; we will render using an iframe with zero spacing too.
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 2px auto;">
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%"
+           style="display:block;border-radius:14px;background:#0f1115;">
         <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
           <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
@@ -284,10 +298,9 @@ def centered_play(label, key=None):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- FRAGMENT: PLAY AREA (map + input directly stacked) --------------------
+# -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
 def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
-    # Ring / colorization hint based on last guess
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], by_key)
@@ -309,16 +322,15 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Center column
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # ---- Map (tight bottom margin) ----
-        st.markdown(
+        # SAFE map render (iframe or st.html) with zero extra gap
+        render_html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            unsafe_allow_html=True
+            height=VIEW_H,  # exact height → input sits right below
         )
 
-        # ---- Guess input sits immediately under map ----
+        # Guess input immediately under the map
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -380,7 +392,7 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-# Load assets & data (cached)
+# Load assets & data
 SVG_URI, SVG_W, SVG_H, _is_static = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
@@ -415,7 +427,6 @@ elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
     with st.container():
         render_mode_picker(title_on_top=True)
-
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
     play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
 
