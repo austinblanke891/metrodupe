@@ -1,5 +1,4 @@
-# Tube Guessr — Public (welcome -> start flow; choose mode once on Start)
-# Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
+# Tube Guessr — faster Streamlit version (fragments, caching, static SVG, forms)
 
 import base64
 import csv
@@ -15,8 +14,11 @@ import streamlit as st
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback SVG (if /static/ not used)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
+
+# Optional recommended static path (served by Streamlit when enableStaticServing=true)
+STATIC_SVG_URL = "/static/tube_map_clean.svg"     # Put file at .streamlit/static/tube_map_clean.svg
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -24,6 +26,42 @@ ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
+
+# -------------------- CONSTANT HTML/CSS --------------------
+GLOBAL_CSS = """
+<style>
+  .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
+  .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
+
+  .map-wrap { margin: 0 auto 8px auto !important; }
+
+  .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
+  .stTextInput>div>div>input {
+    text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
+  }
+
+  .sugg-list .stButton>button {
+    min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px;
+  }
+
+  .post-input { margin-top: 6px; }
+
+  .play-center { display:flex; justify-content:center; }
+  .play-center .stButton>button {
+    min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
+  }
+</style>
+"""
+
+GRAY_FILTER_DEF = """
+<filter id="gray">
+  <feColorMatrix type="matrix"
+    values="0.2126 0.7152 0.0722 0 0
+            0.2126 0.7152 0.0722 0 0
+            0.2126 0.7152 0.0722 0 0
+            0      0      0      1 0"/>
+</filter>
+"""
 
 # -------------------- DATA --------------------
 @dataclass
@@ -65,6 +103,7 @@ def ensure_db():
         with open(DB_PATH, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["name", "fx", "fy", "lines"])
 
+@st.cache_data(show_spinner=False)
 def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     ensure_db()
     stations: List[Station] = []
@@ -111,23 +150,37 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
-def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
+def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
+    """
+    Returns (svg_uri, base_w, base_h, is_static).
+    Prefers static URL (/static/...) if present; else falls back to data URI.
+    """
+    # If static file exists, use it (browser caches it across reruns)
+    static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
+    if static_fs.exists():
+        raw = static_fs.read_bytes()
+        txt = raw.decode("utf-8", errors="ignore")
+        base_w, base_h = _infer_svg_dimensions(txt, raw)
+        return STATIC_SVG_URL, base_w, base_h, True
+
+    # Fallback: use your existing file and data URI (still cached at resource level)
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
+    base_w, base_h = _infer_svg_dimensions(txt, raw)
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}", base_w, base_h, False
+
+def _infer_svg_dimensions(txt: str, raw_bytes: bytes) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
-        base_w = float(w_str); base_h = float(h_str)
-    else:
-        def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
-        w_attr = re.search(r'width="([^"]+)"', txt)
-        h_attr = re.search(r'height="([^"]+)"', txt)
-        base_w = f(w_attr.group(1) if w_attr else None)
-        base_h = f(h_attr.group(1) if h_attr else None)
-    b64 = base64.b64encode(raw).decode("ascii")
-    return f"data:image/svg+xml;base64,{b64}", base_w, base_h
+        return float(w_str), float(h_str)
+    def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
+    w_attr = re.search(r'width="([^"]+)"', txt)
+    h_attr = re.search(r'height="([^"]+)"', txt)
+    return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
 # -------------------- GEOMETRY / SVG RENDER --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -136,50 +189,33 @@ def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float
     ty = VIEW_H / 2 - cy * zoom
     return tx, ty
 
-def project_to_screen(baseW: float, baseH: float,
-                      fx_target: float, fy_target: float,
-                      fx_center: float, fy_center: float,
-                      zoom: float) -> Tuple[float, float]:
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
-    x = fx_target * baseW * zoom + tx
-    y = fy_target * baseH * zoom + ty
+def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: float, zoom: float, fx: float, fy: float) -> Tuple[float, float]:
+    x = fx * baseW * zoom + tx
+    y = fy * baseH * zoom + ty
     return x, y
 
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
-                  fx_center: float, fy_center: float,
-                  zoom: float, colorize: bool, ring_color: str,
+                  tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
+    image_style = '' if colorize else 'filter:url(#gray);'
 
-    gray_filter = """
-      <filter id="gray">
-        <feColorMatrix type="matrix"
-          values="0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0      0      0      1 0"/>
-      </filter>
-    """
-    image_style = 'filter:url(#gray);' if not colorize else ''
-
-    overlay_svg = ""
+    # Build overlay circles
     if overlays:
-        parts = []
-        for (sx, sy, color, rr) in overlays:
-            parts.append(
-                f"""<g class="guess-marker">
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                              fill="{color}" fill-opacity="0.28"
-                              stroke="{color}" stroke-width="2" />
-                    </g>"""
-            )
+        parts = [
+            f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
+            f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" /></g>'
+            for (sx, sy, color, rr) in overlays
+        ]
         overlay_svg = "\n".join(parts)
+    else:
+        overlay_svg = ""
 
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
-        <defs>{gray_filter}</defs>
+        <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
           <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
         </g>
@@ -206,54 +242,6 @@ def start_round(stations, by_key, names):
     st.session_state.answer = by_key[norm(choice_name)]
     return True
 
-# -------------------- STREAMLIT APP --------------------
-st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
-
-# Global CSS
-st.markdown(
-    """
-    <style>
-      .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
-      .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
-
-      .map-wrap { margin: 0 auto 8px auto !important; }
-
-      .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
-      .stTextInput>div>div>input {
-        text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
-      }
-
-      .sugg-list .stButton>button {
-        min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px;
-      }
-
-      .post-input { margin-top: 6px; }
-
-      .play-center { display:flex; justify-content:center; }
-      .play-center .stButton>button {
-        min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Session state
-if "phase" not in st.session_state:
-    st.session_state.phase="welcome"
-    st.session_state.mode="daily"
-    st.session_state.answer=None
-    st.session_state.remaining=MAX_GUESSES
-    st.session_state.history=[]
-    st.session_state.won=False
-if "feedback" not in st.session_state:
-    st.session_state["feedback"] = ""
-
-# Load assets & data
-SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
-STATIONS, BY_KEY, NAMES = load_db()
-
-# Helpers
 def render_mode_picker(title_on_top=False):
     if title_on_top:
         st.markdown("### Mode")
@@ -263,60 +251,38 @@ def render_mode_picker(title_on_top=False):
         index=(0 if st.session_state.mode == "daily" else 1),
         horizontal=True,
         label_visibility="collapsed",
+        key="mode_radio"
     )
     st.session_state.mode = choice
 
-def centered_play(label):
+def centered_play(label, key=None):
     st.markdown('<div class="play-center">', unsafe_allow_html=True)
-    clicked = st.button(label, type="primary")
+    clicked = st.button(label, type="primary", key=key)
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- WELCOME PAGE (no mode here) --------------------
-if st.session_state.phase == "welcome":
-    st.markdown("# Tube Guessr")
-    st.markdown(
-        """
-        Guess the London Underground station from a zoomed-in crop of the Tube map.
-
-        **How to play**
-        - Start typing a station name in the search box on the game screen, then press Enter.
-        - A list of auto-fill suggestions will appear — click one to submit your guess.
-        - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
-        - You have 6 guesses.
-        """
-    )
-    st.divider()
-    if centered_play("Play"):
-        st.session_state.phase="start"
-        st.rerun()
-
-# -------------------- START (choose mode once here) --------------------
-elif st.session_state.phase == "start":
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
-    st.write("")
-    if centered_play("Start Game"):
-        if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
-
-# -------------------- PLAY / END --------------------
-elif st.session_state.phase in ("play","end"):
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
-
-    answer: Station = st.session_state.answer or STATIONS[0]
-    colorize=False
+# -------------------- FRAGMENT: PLAY AREA --------------------
+@st.fragment
+def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_h):
+    # Determine colorization based on last guess
+    colorize = False
     if st.session_state.history:
-        last = resolve_guess(st.session_state.history[-1], BY_KEY)
-        if last and same_line(last, answer): colorize=True
+        last = resolve_guess(st.session_state.history[-1], by_key)
+        if last and same_line(last, answer):
+            colorize = True
+
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
+    # Precompute transform once
+    tx, ty = css_transform(svg_w, svg_h, answer.fx, answer.fy, ZOOM)
+
+    # Overlays: compute using precomputed tx,ty
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
-        st_obj = resolve_guess(gname, BY_KEY)
+        st_obj = resolve_guess(gname, by_key)
         if not st_obj or st_obj.key == answer.key:
             continue
-        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
+        sx, sy = project_to_screen_precomputed(svg_w, svg_h, tx, ty, ZOOM, st_obj.fx, st_obj.fy)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
@@ -324,10 +290,11 @@ elif st.session_state.phase in ("play","end"):
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         st.markdown(
-            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+            make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
+        # Input + suggestions (live inside fragment → partial reruns only here)
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -335,14 +302,14 @@ elif st.session_state.phase in ("play","end"):
                 placeholder="Start typing… then press Enter",
                 label_visibility="collapsed",
             )
-            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
+            sugg = prefix_suggestions(q_now or "", names, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
                 for s in sugg:
                     if st.button(s, key=f"sugg_{s}", use_container_width=True):
                         st.session_state.history.append(s)
                         st.session_state.remaining -= 1
-                        chosen = resolve_guess(s, BY_KEY)
+                        chosen = resolve_guess(s, by_key)
                         if chosen and chosen.key == answer.key:
                             st.session_state.won = True
                             st.session_state.phase = "end"
@@ -356,8 +323,7 @@ elif st.session_state.phase in ("play","end"):
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
-                        st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+                        st.rerun()  # keep this to jump to end state immediately
 
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
@@ -372,5 +338,64 @@ elif st.session_state.phase in ("play","end"):
                 st.success("Correct!")
             else:
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
-            if centered_play("Play again"):
-                if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
+            if centered_play("Play again", key="play_again_btn"):
+                if start_round(stations, by_key, names): st.rerun()
+
+# -------------------- STREAMLIT APP --------------------
+st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
+st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+
+# Session state init
+if "phase" not in st.session_state:
+    st.session_state.phase="welcome"
+    st.session_state.mode="daily"
+    st.session_state.answer=None
+    st.session_state.remaining=MAX_GUESSES
+    st.session_state.history=[]
+    st.session_state.won=False
+if "feedback" not in st.session_state:
+    st.session_state["feedback"] = ""
+
+# Load assets & data (cached)
+SVG_URI, SVG_W, SVG_H, _is_static = load_svg_data(SVG_PATH)
+STATIONS, BY_KEY, NAMES = load_db()
+
+# -------------------- WELCOME PAGE --------------------
+if st.session_state.phase == "welcome":
+    st.markdown("# Tube Guessr")
+    st.markdown(
+        """
+        Guess the London Underground station from a zoomed-in crop of the Tube map.
+
+        **How to play**
+        - Start typing a station name in the search box on the game screen, then press Enter.
+        - A list of auto-fill suggestions will appear — click one to submit your guess.
+        - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
+        - You have 6 guesses.
+        """
+    )
+    st.divider()
+    if centered_play("Play", key="welcome_play_btn"):
+        st.session_state.phase="start"
+        st.rerun()
+
+# -------------------- START (mode selection via form to batch events) --------------------
+elif st.session_state.phase == "start":
+    st.markdown("# Tube Guessr")
+    with st.form("mode_pick"):
+        render_mode_picker(title_on_top=True)
+        submitted = st.form_submit_button("Start Game")
+    if submitted:
+        if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
+
+# -------------------- PLAY / END --------------------
+elif st.session_state.phase in ("play","end"):
+    st.markdown("# Tube Guessr")
+    # This simple form prevents extra reruns when toggling mode during play
+    with st.form("mode_inline_form", clear_on_submit=False):
+        render_mode_picker(title_on_top=True)
+        # No submit button; purely informational during play
+
+    # Use a safe fallback if answer missing
+    answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?",0.5,0.5,[]))
+    play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
