@@ -1,6 +1,6 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Guess markers: larger translucent circles (r=30), hidden when correct; amber if same line.
-# Suggestions update live while typing. Calibration removed.
+# Live suggestions (no "Press Enter"), big translucent markers (r=30), hide marker on correct.
+# Amber = same line as answer; Red = different line. Calibration removed.
 
 import base64
 import csv
@@ -231,7 +231,7 @@ st.markdown(
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
-# Session state
+# Session state (no programmatic writes to the input value to keep live updates)
 if "phase" not in st.session_state:
     st.session_state.phase="start"
     st.session_state.mode="daily"
@@ -239,8 +239,6 @@ if "phase" not in st.session_state:
     st.session_state.remaining=MAX_GUESSES
     st.session_state.history=[]
     st.session_state.won=False
-if "guess_text" not in st.session_state:
-    st.session_state["guess_text"] = ""
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
@@ -261,8 +259,7 @@ def start_round() -> bool:
     st.session_state.remaining=MAX_GUESSES
     st.session_state.won=False
     st.session_state["feedback"] = ""
-    if "guess_text" in st.session_state:
-        del st.session_state["guess_text"]  # ensures a clean filter box next run
+    # IMPORTANT: do NOT write to the text input's session_state here
     rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
     choice_name = rng.choice(NAMES)
     st.session_state.answer = BY_KEY[norm(choice_name)]
@@ -284,23 +281,21 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build translucent circle overlays for visible guesses (project using ANSWER as center!)
+    # Build translucent overlays for visible guesses (project using ANSWER as center!)
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj:
             continue
-        # Skip overlay if the guess is exactly correct (don't show red/amber on top of the answer)
         if st_obj.key == answer.key:
-            continue
+            continue  # don't draw over correct guess
         sx, sy = project_to_screen(SVG_W, SVG_H,
                                    st_obj.fx, st_obj.fy,
                                    answer.fx, answer.fy,
                                    ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            # Amber if same line as the answer, else red
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))  # radius=30 (≈3× the original diameter)
+            overlays.append((sx, sy, color, 30.0))  # radius 30 (≈3× diameter)
 
     # Map with overlays
     _L, mid, _R = st.columns([1,2,1])
@@ -311,11 +306,13 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         )
 
         if st.session_state.phase == "play":
-            # LIVE suggestions (no Enter required): text_input triggers a rerun on every keystroke
-            q_now = st.text_input("Type to search stations",
-                                  key="guess_text",
-                                  placeholder="Start typing…",
-                                  label_visibility="collapsed")
+            # LIVE suggestions: let the widget manage its own state (no programmatic writes)
+            q_now = st.text_input(
+                "Type to search stations",
+                key="guess_box",
+                placeholder="Start typing…",
+                label_visibility="collapsed"
+            )
 
             sugg = prefix_suggestions(q_now, NAMES, limit=5)
             if sugg:
