@@ -1,5 +1,5 @@
-# Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Live suggestions on each keystroke with native st.text_input (no forms, no programmatic writes).
+# Metrodle Dupe — Public (pixel-accurate inline SVG crop)
+# Live suggestions on every keystroke using streamlit-searchbox (falls back to st.text_input).
 # Big translucent markers (r=30): amber = same line, red = different line, hidden for correct.
 # Calibration removed.
 
@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+
+# Try a keystroke-reactive search box
+HAS_SB = False
+try:
+    from streamlit_searchbox import st_searchbox
+    HAS_SB = True
+except Exception:
+    HAS_SB = False
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -232,7 +240,7 @@ st.markdown(
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
-# Session state (NOTE: we do NOT modify the input's key anywhere)
+# Session state
 if "phase" not in st.session_state:
     st.session_state.phase="start"
     st.session_state.mode="daily"
@@ -260,7 +268,6 @@ def start_round() -> bool:
     st.session_state.remaining=MAX_GUESSES
     st.session_state.won=False
     st.session_state["feedback"] = ""
-    # IMPORTANT: do not touch the input's key here → keeps live keystrokes working
     rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
     choice_name = rng.choice(NAMES)
     st.session_state.answer = BY_KEY[norm(choice_name)]
@@ -282,23 +289,17 @@ if st.session_state.phase in ("play", "end") and STATIONS:
 
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build translucent overlays for visible guesses (project using ANSWER as center!)
+    # Translucent overlays for visible (wrong) guesses
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
-        if not st_obj:
+        if not st_obj or st_obj.key == answer.key:
             continue
-        if st_obj.key == answer.key:
-            continue  # don't draw over correct guess
-        sx, sy = project_to_screen(SVG_W, SVG_H,
-                                   st_obj.fx, st_obj.fy,
-                                   answer.fx, answer.fy,
-                                   ZOOM)
+        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))  # radius 30
+            overlays.append((sx, sy, color, 30.0))
 
-    # Map with overlays
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         st.markdown(
@@ -307,38 +308,55 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         )
 
         if st.session_state.phase == "play":
-            # Native text_input; we NEVER write to this key anywhere.
-            q_now = st.text_input(
-                "Type to search stations",
-                key="live_guess_box",
-                placeholder="Start typing…",
-                label_visibility="collapsed"
-            )
+            # ---- Live keystroke suggestions ----
+            picked: Optional[str] = None
 
-            # LIVE suggestions (recompute each rerun; text_input triggers on every keystroke)
-            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
-            if sugg:
-                st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
-                for s in sugg:
-                    if st.button(s, key=f"sugg_{s}", use_container_width=True):
-                        st.session_state.history.append(s)
-                        st.session_state.remaining -= 1
-                        picked = resolve_guess(s, BY_KEY)
-                        if picked and picked.key == answer.key:
-                            st.session_state.won = True
-                            st.session_state.phase = "end"
-                            st.session_state["feedback"] = ""
-                        else:
-                            if picked and same_line(picked, answer):
-                                lines = ", ".join(overlap_lines(picked, answer)) or "right line"
-                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
-                            else:
-                                st.session_state["feedback"] = "❌ Wrong station."
-                            if st.session_state.remaining <= 0:
-                                st.session_state.won = False
-                                st.session_state.phase = "end"
-                        st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+            if HAS_SB:
+                def _search_fn(q: str) -> List[str]:
+                    return prefix_suggestions(q, NAMES, limit=5)
+                picked = st_searchbox(
+                    _search_fn,
+                    key="live_searchbox",
+                    placeholder="Start typing…",
+                    clear_on_submit=True,
+                    default=None,              # do not preset a value
+                )
+            else:
+                # Fallback: plain input (older Streamlit may need Enter)
+                q_now = st.text_input(
+                    "Type to search stations",
+                    key="live_searchbox_fallback",
+                    placeholder="Start typing…",
+                    label_visibility="collapsed"
+                )
+                sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
+                if sugg:
+                    st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
+                    for s in sugg:
+                        if st.button(s, key=f"sugg_{s}", use_container_width=True):
+                            picked = s
+                            break
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            # If a suggestion was picked, immediately score it
+            if picked:
+                st.session_state.history.append(picked)
+                st.session_state.remaining -= 1
+                chosen = resolve_guess(picked, BY_KEY)
+                if chosen and chosen.key == answer.key:
+                    st.session_state.won = True
+                    st.session_state.phase = "end"
+                    st.session_state["feedback"] = ""
+                else:
+                    if chosen and same_line(chosen, answer):
+                        lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
+                        st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
+                    else:
+                        st.session_state["feedback"] = "❌ Wrong station."
+                    if st.session_state.remaining <= 0:
+                        st.session_state.won = False
+                        st.session_state.phase = "end"
+                st.rerun()
 
             if st.session_state.get("feedback"):
                 st.info(st.session_state["feedback"])
