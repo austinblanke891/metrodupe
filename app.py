@@ -1,4 +1,4 @@
-# Tube Guessr — polished UI, tight spacing, safe SVG render, fragment polyfill & caching
+# Tube Guessr — tight spacing, polished UI, safe SVG render, fragment polyfill & caching
 
 import base64
 import csv
@@ -26,6 +26,14 @@ except AttributeError:
             return func
 # -----------------------------------------------------------------
 
+# Prefer st.html (Streamlit ≥ 1.36); fallback to components.html
+def render_html(html: str, *, height: int):
+    if hasattr(st, "html"):
+        st.html(html, height=height)
+    else:
+        # n.b. Streamlit wraps components in an iframe; we zero its margins via CSS below
+        components.v1.html(html, height=height, scrolling=False)
+
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
@@ -45,12 +53,11 @@ MAX_GUESSES = 6
 # -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
-  .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
+  .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: 0.6rem; }
+  .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove borders/boxes around Streamlit forms/containers */
+  /* Remove borders/boxes */
   .stForm, .stContainer { border: none !important; box-shadow: none !important; }
-  section.main > div { padding-top: 0 !important; }
 
   /* Radio group */
   div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
@@ -62,12 +69,12 @@ GLOBAL_CSS = """
   }
   .stButton>button:hover { background: #1d4ed8; }
 
-  /* Centered button helper */
+  /* Center helper */
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
-  /* Text input */
-  .stTextInput { margin-top: 2px !important; margin-bottom: 4px !important; }
+  /* Text input — super tight */
+  .stTextInput { margin-top: 0 !important; margin-bottom: 2px !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
     border-radius: 10px;
@@ -80,8 +87,11 @@ GLOBAL_CSS = """
 
   .post-input { margin-top: 6px; font-size: 0.95rem; }
 
-  /* Map wrapper: smaller bottom gap */
-  .map-wrap { margin: 0 auto 4px auto !important; }
+  /* Map wrapper: absolutely minimal gap */
+  .map-wrap { margin: 0 auto 0 auto !important; }
+
+  /* If components uses an iframe, kill any default spacing under it */
+  [data-testid="stIFrame"] { margin-bottom: 0 !important; padding-bottom: 0 !important; }
 </style>
 """
 
@@ -242,7 +252,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         overlay_svg = ""
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 4px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
         <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -293,7 +303,6 @@ def centered_play(label, key=None):
 # -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
 def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
-    # Determine colorization based on last guess
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], by_key)
@@ -318,16 +327,13 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map (tight bottom spacing)
-        components.v1.html(
+        # Map (no bottom gap); height == VIEW_H for exact fit
+        render_html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            height=VIEW_H + 20,
-            scrolling=False,
+            height=VIEW_H
         )
 
-        # Tight container for guess input + suggestions right under map
-        st.markdown("<div style='margin-top:6px'>", unsafe_allow_html=True)
-
+        # Guess input directly under map with 0 top margin
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -357,9 +363,6 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
                         st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)  # end tight container
 
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
@@ -380,10 +383,6 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 # -------------------- APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-
-# (Optional) show runtime info for debugging versions
-import sys
-st.caption(f"Running Streamlit {getattr(st, '__version__', 'unknown')} on Python {sys.version.split()[0]}")
 
 # Session state init
 if "phase" not in st.session_state:
