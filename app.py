@@ -1,4 +1,4 @@
-# Tube Guessr — safe map render + zero spacing under map, fragment polyfill & caching
+# Tube Guessr — safe map render + ZERO spacing under map, fragment polyfill & caching
 
 import base64
 import csv
@@ -60,7 +60,7 @@ GLOBAL_CSS = """
   .block-container { max-width: 1100px; padding-top: 1.0rem; padding-bottom: 0.5rem; }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove borders/boxes */
+  /* Remove Streamlit card borders */
   .stForm, .stContainer { border: none !important; box-shadow: none !important; }
 
   /* Radios */
@@ -75,24 +75,22 @@ GLOBAL_CSS = """
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
-  /* ======= CRUSH VERTICAL GAPS (map + input hug) ======= */
-  /* Streamlit stacks each element in a "VerticalBlock" with default row-gap.
-     Reduce that globally to a tiny value, so elements sit close together. */
-  section.main div[data-testid="stVerticalBlock"] { row-gap: 4px !important; }
-
-  /* Reduce default bottom margins of element containers */
-  section.main div.element-container { margin-bottom: 0 !important; }
-
-  /* Markdown containers sometimes add extra space */
+  /* ======= REMOVE ALL AUTOMATIC VERTICAL GAPS ======= */
+  /* Each stack of elements lives in a VerticalBlock -> crush the row-gap */
+  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+  /* Element wrappers add bottom margin -> remove it */
+  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+  /* Markdown container sometimes adds space */
   section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 
-  /* Map wrapper: zero bottom gap */
+  /* Map wrapper (no bottom gap) */
   .map-wrap { margin: 0 auto 0 auto !important; }
 
-  /* Kill any spacing under the iframe used by components.html/st.html */
+  /* If iframe is used for HTML, remove its spacing */
   [data-testid="stIFrame"] { margin: 0 !important; padding: 0 !important; display: block; }
 
-  /* Guess input sits snug under map */
+  /* Guess input sits flush under map */
+  .guess-wrap { margin: 0 !important; padding: 0 !important; }
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
@@ -335,13 +333,14 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # SAFE map render with zero gap
+        # SAFE map render (no DOM error)
         render_html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
             height=VIEW_H
         )
 
-        # Guess input immediately under the map
+        # Guess input wrapped directly after map with ZERO spacing
+        st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -371,6 +370,8 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
                         st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
