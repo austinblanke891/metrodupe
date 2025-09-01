@@ -1,0 +1,8 @@
+# .streamlit/config.toml
+[server]
+headless = true
+enableStaticServing = true
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
