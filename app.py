@@ -1,4 +1,4 @@
-# Tube Guessr — map via st.markdown (no iframe), ZERO spacing, fragment polyfill & caching
+# Tube Guessr — header padding, zero map->input gap, nicer suggestion spacing, custom result cards
 
 import base64
 import csv
@@ -44,10 +44,12 @@ MAX_GUESSES = 6
 # -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  .block-container { max-width: 1100px; padding-top: 1rem; padding-bottom: .5rem; }
+  /* More top padding so the title never gets clipped by the app header */
+  .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
+  @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove Streamlit card borders & gaps */
+  /* Remove Streamlit card borders & default vertical gaps */
   section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
   section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
   section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
@@ -74,8 +76,21 @@ GLOBAL_CSS = """
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
   }
 
-  .sugg-list .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%; }
-  .post-input { margin-top: 6px; font-size: .95rem; }
+  /* Suggestion list spacing & subtle separation */
+  .sugg-list { margin-top: 6px; }
+  .sugg-list .stButton { margin-bottom: 8px !important; }
+  .sugg-list .stButton>button {
+    width: 100%;
+    border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
+  }
+
+  .post-input { margin-top: 8px; font-size: .95rem; }
+
+  /* Custom result cards */
+  .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
+  .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
+  .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
 </style>
 """
 
@@ -211,10 +226,10 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """Return HTML string that Streamlit can inject directly (no iframe)."""
+    """
+    Returns HTML (no iframe). Grayscale via CSS filter (no SVG <defs> needed).
+    """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-
-    # Use CSS grayscale instead of <filter> to avoid DOM/JS issues
     image_style = 'filter: none;' if colorize else 'filter: grayscale(1);'
 
     overlay_svg = ""
@@ -225,8 +240,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
             for (sx, sy, color, rr) in overlays
         )
 
-    # Wrapper has zero margin-bottom; SVG is responsive and natural-height;
-    # placing the Streamlit input right after this block yields flush stacking.
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
@@ -240,6 +253,13 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
       </svg>
     </div>
     """
+
+# -------------------- CARDS --------------------
+def success_card(text: str) -> str:
+    return f'<div class="card success">{text}</div>'
+
+def error_card(text: str) -> str:
+    return f'<div class="card error">{text}</div>'
 
 # -------------------- GAME HELPERS --------------------
 def start_round(stations, by_key, names):
@@ -307,7 +327,7 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
             unsafe_allow_html=True
         )
 
-        # Guess input immediately under the map (same VerticalBlock, zero margins)
+        # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
         if st.session_state.phase == "play":
             q_now = st.text_input(
@@ -351,9 +371,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
         _l, c, _r = st.columns([1,1,1])
         with c:
             if st.session_state.won:
-                st.success("Correct!")
+                st.markdown(success_card("Correct!"), unsafe_allow_html=True)
             else:
-                st.error(f"Out of guesses. The station was **{answer.name}**.")
+                st.markdown(error_card(f"Out of guesses. The station was <b>{answer.name}</b>."), unsafe_allow_html=True)
             if centered_play("Play again", key="play_again_btn"):
                 if start_round(stations, by_key, names): st.rerun()
 
@@ -373,7 +393,11 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # Load assets & data
-SVG_URI, SVG_W, SVG_H, _is_static = load_svg_data(SVG_PATH)
+def _load_svg(svg_path: Path) -> Tuple[str, float, float, bool]:
+    # wrapper to call cached function defined above
+    return load_svg_data(svg_path)
+
+SVG_URI, SVG_W, SVG_H, _is_static = _load_svg(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- ROUTING --------------------
