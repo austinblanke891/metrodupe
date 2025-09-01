@@ -9,3 +9,6 @@ pymupdf>=1.23
 
 # Streamlit widget for clicking coordinates on images
 streamlit-image-coordinates>=0.1.6
+
+streamlit==1.36.0
+streamlit-searchbox==0.1.4
