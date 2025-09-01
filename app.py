@@ -1,4 +1,4 @@
-# Metrodle Dupe — Public (with Welcome Page)
+# Tube Guessr — Public (with Welcome Page + big mode buttons)
 # Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
 
 import base64
@@ -181,7 +181,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         overlay_svg = "\n".join(parts)
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -211,18 +211,18 @@ def start_round(stations, by_key, names):
     return True
 
 # -------------------- STREAMLIT APP --------------------
-st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
+st.set_page_config(page_title="Tube Guessr", page_icon="🗺️", layout="wide")
 
-# Global CSS (spacing; mobile-friendly)
+# Global CSS (spacing; mobile-friendly; big mode buttons)
 st.markdown(
     """
     <style>
-      .block-container { max-width: 1100px; padding-top: 1.75rem; padding-bottom: 1rem; }
+      .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
       .map-wrap { margin: 0 auto 8px auto !important; }
 
-      .stTextInput { margin-top: 6px !important; margin-bottom: 8px !important; }
+      .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
@@ -234,6 +234,18 @@ st.markdown(
       .post-input { margin-top: 6px; }
 
       .play-again .stButton>button { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; }
+
+      /* Big Mode Buttons */
+      .mode-btn > button {
+        width: 100%;
+        padding: 14px 18px;
+        font-size: 1.05rem;
+        border-radius: 12px;
+      }
+      .mode-row { gap: 12px; }
+      @media (max-width: 640px) {
+        .mode-row { gap: 8px; }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -241,7 +253,7 @@ st.markdown(
 
 # Session state
 if "phase" not in st.session_state:
-    st.session_state.phase="welcome"    # <— NEW: show welcome page first
+    st.session_state.phase="welcome"    # show welcome page first
     st.session_state.mode="daily"
     st.session_state.answer=None
     st.session_state.remaining=MAX_GUESSES
@@ -254,48 +266,68 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
+# -------------- Helper: Big mode picker (Daily / Practice) --------------
+def render_mode_picker(centered: bool = True):
+    cols = st.columns([1,1]) if not centered else st.columns([1,1], gap="small")
+    with cols[0]:
+        if st.container().button("🎯 Daily", key="mode_daily_btn", type=("primary" if st.session_state.mode=="daily" else "secondary"), use_container_width=True):
+            st.session_state.mode = "daily"
+    with cols[1]:
+        if st.container().button("🎲 Practice", key="mode_practice_btn", type=("primary" if st.session_state.mode=="practice" else "secondary"), use_container_width=True):
+            st.session_state.mode = "practice"
+    # Add class to style both buttons uniformly
+    st.markdown("""
+      <script>
+        const btns = window.parent.document.querySelectorAll('button[kind]');
+        btns.forEach(b=>{ if(!b.parentElement.classList.contains('mode-btn')) b.parentElement.classList.add('mode-btn'); });
+      </script>
+    """, unsafe_allow_html=True)
+
 # -------------------- WELCOME PAGE --------------------
 if st.session_state.phase == "welcome":
-    st.markdown("# Metrodle Dupe")
+    st.markdown("# Tube Guessr")
     st.markdown(
         """
-        Guess the London Underground station by looking at a **zoomed-in crop** of the Tube map.
+        Guess the London Underground station from a **zoomed-in crop** of the Tube map.
 
         **How to play**
-        - Choose **Daily** (same station for everyone today) or **Practice** (random each time).
-        - Look at the cropped map and **start typing a station**.
-        - Click one of the **suggestions** to make a guess.
-        - If you’re wrong **but on the correct line**, we’ll tell you (map tint turns amber).
+        - Pick a mode below (**Daily** = same station for everyone today, **Practice** = random).
+        - **Start typing** a station name in the search box on the game screen, **then press Enter**.
+        - A list of **auto-fill suggestions** will appear — **click a suggestion** to submit your guess.
+        - If your guess is wrong **but on the correct line**, we’ll tell you (map tint turns amber).
         - You have **6 guesses**. Good luck!
-
-        👉 Tap **Play** to begin.
         """
     )
     st.divider()
+
+    st.markdown("### Choose a mode")
+    render_mode_picker()
+
+    st.write("")
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
-        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
         if st.button("Play", type="primary", use_container_width=True):
             st.session_state.phase="start"
             st.rerun()
 
 # -------------------- START (mode confirmation) --------------------
 elif st.session_state.phase == "start":
-    st.markdown("# Metrodle Dupe")
+    st.markdown("# Tube Guessr")
+    st.markdown("### Choose a mode")
+    render_mode_picker()
+    st.write("")
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
-        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
         if st.button("Start Game", type="primary", use_container_width=True):
             if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
 # -------------------- PLAY / END --------------------
 elif st.session_state.phase in ("play","end"):
-    st.markdown("# Metrodle Dupe")
+    st.markdown("# Tube Guessr")
 
     # Mode (still switchable mid-game if you want)
-    c1, _, _ = st.columns([1,1,1])
-    with c1:
-        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
+    st.markdown("### Mode")
+    render_mode_picker(centered=False)
 
     # Build overlays for wrong guesses visible in the crop (ANSWER is center)
     answer: Station = st.session_state.answer or STATIONS[0]
@@ -328,7 +360,7 @@ elif st.session_state.phase in ("play","end"):
             q_now = st.text_input(
                 "Type to search stations",
                 key="live_guess_box",
-                placeholder="Start typing…",
+                placeholder="Start typing… then press Enter to refresh suggestions",
                 label_visibility="collapsed",
             )
 
