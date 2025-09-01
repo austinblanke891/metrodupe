@@ -1,5 +1,5 @@
 # Core app framework
-streamlit>=1.33
+streamlit==1.36.0
 
 # Image handling
 Pillow>=9.0
@@ -10,5 +10,5 @@ pymupdf>=1.23
 # Streamlit widget for clicking coordinates on images
 streamlit-image-coordinates>=0.1.6
 
-streamlit==1.36.0
+# Autocomplete/searchbox widget
 streamlit-searchbox==0.1.4
