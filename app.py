@@ -406,9 +406,11 @@ elif st.session_state.phase == "start":
 # -------------------- PLAY / END --------------------
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
-    # Inline “mode” display; no submit button during play
-    with st.form("mode_inline_form", clear_on_submit=False):
+
+    # Show mode without a form (prevents 'Missing Submit Button' warning)
+    with st.container():
         render_mode_picker(title_on_top=True)
+
     # Safe fallback if answer missing
-    answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?",0.5,0.5,[]))
+    answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
     play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
