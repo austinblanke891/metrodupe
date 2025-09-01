@@ -1,4 +1,4 @@
-# Tube Guessr — Public (with Welcome Page + card mode selector)
+# Tube Guessr — Public (with Welcome Page + Split Toggle for Daily/Practice)
 # Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
 
 import base64
@@ -209,7 +209,7 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Global CSS (layout + card selector)
+# Global CSS (layout + split toggle + compact Play)
 st.markdown(
     """
     <style>
@@ -230,22 +230,37 @@ st.markdown(
       .post-input { margin-top: 6px; }
       .play-again .stButton>button { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; }
 
-      /* Card selector */
-      .mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      @media (max-width: 680px) { .mode-cards { grid-template-columns: 1fr; } }
-      .mode-card {
-        border: 1px solid rgba(255,255,255,.15);
+      /* Split toggle container */
+      .mode-toggle { max-width: 620px; margin: 8px auto 6px auto; }
+      .mode-toggle-row { display: grid; grid-template-columns: 1fr 1fr; }
+      .seg-wrap { }
+      .seg-wrap .stButton>button {
+        height: 56px; width: 100%;
+        border: 1px solid #ef4444;
         background: rgba(255,255,255,.04);
-        border-radius: 14px;
-        padding: 16px;
-      }
-      .mode-card.selected { border: 2px solid #ef4444; background: rgba(239,68,68,.08); }
-      .mode-card .stButton>button {
-        width: 100%; height: 84px;
-        border-radius: 10px;
+        color: inherit;
+        border-radius: 0;
         font-size: 1.05rem;
       }
-      .mode-subtext { margin-top: 6px; opacity: .8; font-size: .92rem; }
+      .seg-left .stButton>button {
+        border-top-left-radius: 14px; border-bottom-left-radius: 14px;
+      }
+      .seg-right .stButton>button {
+        border-top-right-radius: 14px; border-bottom-right-radius: 14px;
+        margin-left: -1px; /* collapse inner border */
+      }
+      .seg-selected .stButton>button {
+        background: #ef4444; border-color: #ef4444; color: #fff;
+      }
+      .mode-help { max-width: 620px; margin: 6px auto 10px; opacity: .85; font-size: .95rem; }
+
+      /* Smaller, pill-shaped Play button */
+      .play-cta .stButton>button {
+        min-width: 200px;
+        border-radius: 9999px;
+        padding: 10px 18px;
+        font-size: 1rem;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -266,27 +281,28 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------- Helper: Card mode selector --------------
-def render_mode_cards():
-    st.markdown('<div class="mode-cards">', unsafe_allow_html=True)
-    # Daily card
-    col1, col2 = st.columns(2) if st.columns else (None, None)  # not used; just to keep layout consistent
-    selected_daily = (st.session_state.mode == "daily")
-    st.markdown(f'<div class="mode-card {"selected" if selected_daily else ""}">', unsafe_allow_html=True)
-    if st.button("Daily", key="mode_daily_card", use_container_width=True):
+# -------------- Helper: Split toggle for mode --------------
+def render_mode_toggle():
+    st.markdown('<div class="mode-toggle">', unsafe_allow_html=True)
+    st.markdown('<div class="mode-toggle-row">', unsafe_allow_html=True)
+
+    left_class  = "seg-wrap seg-left"  + (" seg-selected" if st.session_state.mode=="daily" else "")
+    right_class = "seg-wrap seg-right" + (" seg-selected" if st.session_state.mode=="practice" else "")
+
+    # Left segment
+    st.markdown(f'<div class="{left_class}">', unsafe_allow_html=True)
+    if st.button("Daily", key="mode_daily_seg", use_container_width=True):
         st.session_state.mode = "daily"
-    st.markdown('<div class="mode-subtext">Same station for everyone today</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Practice card
-    selected_practice = (st.session_state.mode == "practice")
-    st.markdown(f'<div class="mode-card {"selected" if selected_practice else ""}">', unsafe_allow_html=True)
-    if st.button("Practice", key="mode_practice_card", use_container_width=True):
+    # Right segment
+    st.markdown(f'<div class="{right_class}">', unsafe_allow_html=True)
+    if st.button("Practice", key="mode_practice_seg", use_container_width=True):
         st.session_state.mode = "practice"
-    st.markdown('<div class="mode-subtext">Random station each game</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)  # /row
+    st.markdown('</div>', unsafe_allow_html=True)  # /toggle
 
 # -------------------- WELCOME PAGE --------------------
 if st.session_state.phase == "welcome":
@@ -306,31 +322,37 @@ if st.session_state.phase == "welcome":
     st.divider()
 
     st.markdown("### Choose a mode")
-    render_mode_cards()
-    st.write("")
+    render_mode_toggle()
+    st.markdown('<div class="mode-help">Daily shows the same station for everyone today. Practice picks a random station.</div>', unsafe_allow_html=True)
+
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
-        if st.button("Play", type="primary", use_container_width=True):
+        st.markdown('<div class="play-cta">', unsafe_allow_html=True)
+        if st.button("Play", type="primary"):
             st.session_state.phase="start"
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------- START --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     st.markdown("### Choose a mode")
-    render_mode_cards()
-    st.write("")
+    render_mode_toggle()
+    st.markdown('<div class="mode-help">Daily shows the same station for everyone today. Practice picks a random station.</div>', unsafe_allow_html=True)
+
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
-        if st.button("Start Game", type="primary", use_container_width=True):
+        st.markdown('<div class="play-cta">', unsafe_allow_html=True)
+        if st.button("Start Game", type="primary"):
             if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------- PLAY / END --------------------
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
 
     st.markdown("### Mode")
-    render_mode_cards()
+    render_mode_toggle()
 
     answer: Station = st.session_state.answer or STATIONS[0]
     colorize=False
@@ -400,7 +422,7 @@ elif st.session_state.phase in ("play","end"):
                 st.success("Correct!")
             else:
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
-            st.markdown('<div class="play-again">', unsafe_allow_html=True)
-            if st.button("Play again", type="primary", use_container_width=True):
+            st.markdown('<div class="play-cta">', unsafe_allow_html=True)
+            if st.button("Play again", type="primary"):
                 if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
