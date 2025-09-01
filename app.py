@@ -1,4 +1,4 @@
-# Tube Guessr — smoother Streamlit version with fragment polyfill & caching
+# Tube Guessr — polished UI, safe SVG render, fragment polyfill & caching
 
 import base64
 import csv
@@ -10,14 +10,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+from streamlit import components
 
 # ---- compat: st.fragment / st.experimental_fragment polyfill ----
-# Use real st.fragment if available; otherwise experimental; otherwise no-op.
 try:
-    st_fragment = st.fragment  # Streamlit ≥ version that exposes .fragment
+    st_fragment = st.fragment  # newest Streamlit
 except AttributeError:
     try:
-        st_fragment = st.experimental_fragment  # some older versions
+        st_fragment = st.experimental_fragment  # older experimental name
     except AttributeError:
         def st_fragment(func=None, **kwargs):
             if func is None:
@@ -29,11 +29,11 @@ except AttributeError:
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback SVG if not using /static
-DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback if not serving via /static
+DB_PATH  = BASE_DIR / "stations_db.csv"
 
-# Optional recommended static path (served when [server].enableStaticServing = true)
-STATIC_SVG_URL = "/static/tube_map_clean.svg"     # Put file at .streamlit/static/tube_map_clean.svg
+# Optional recommended static path (enable with .streamlit/config.toml -> enableStaticServing=true)
+STATIC_SVG_URL = "/static/tube_map_clean.svg"     # Place file at .streamlit/static/tube_map_clean.svg
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -42,29 +42,45 @@ RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
-# -------------------- CONSTANT HTML/CSS --------------------
+# -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
   .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
   .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
-  .map-wrap { margin: 0 auto 8px auto !important; }
+  /* Remove borders/boxes around Streamlit forms/containers */
+  .stForm, .stContainer { border: none !important; box-shadow: none !important; }
+  section.main > div { padding-top: 0 !important; }
 
-  .stTextInput { margin-top: 4px !important; margin-bottom: 8px !important; }
+  /* Radio group */
+  div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
+
+  /* Buttons (primary look) */
+  .stButton>button {
+    min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
+    background: #2563eb; color: white; border: none;
+  }
+  .stButton>button:hover { background: #1d4ed8; }
+
+  /* Centered button helper */
+  .play-center { display:flex; justify-content:center; }
+  .play-center .stButton>button { min-width: 220px; }
+
+  /* Text input */
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
+    border-radius: 10px;
   }
 
+  /* Suggestion buttons */
   .sugg-list .stButton>button {
-    min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px;
+    min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%;
   }
 
-  .post-input { margin-top: 6px; }
+  .post-input { margin-top: 6px; font-size: 0.95rem; }
 
-  .play-center { display:flex; justify-content:center; }
-  .play-center .stButton>button {
-    min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
-  }
+  /* Map wrapper */
+  .map-wrap { margin: 0 auto 8px auto !important; }
 </style>
 """
 
@@ -226,7 +242,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
 
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
         <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
           <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
@@ -273,7 +289,7 @@ def centered_play(label, key=None):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- FRAGMENT: PLAY AREA (uses polyfilled decorator) --------------------
+# -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
 def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
     # Determine colorization based on last guess
@@ -301,9 +317,11 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        st.markdown(
+        # Use components.html to safely render the SVG (prevents TypeError in client)
+        components.v1.html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            unsafe_allow_html=True
+            height=VIEW_H + 40,
+            scrolling=False,
         )
 
         if st.session_state.phase == "play":
@@ -352,11 +370,11 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
             if centered_play("Play again", key="play_again_btn"):
                 if start_round(stations, by_key, names): st.rerun()
 
-# -------------------- STREAMLIT APP --------------------
+# -------------------- APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-# Helpful runtime info (shows what the host actually runs)
+# (Optional) show runtime info for debugging versions
 import sys
 st.caption(f"Running Streamlit {getattr(st, '__version__', 'unknown')} on Python {sys.version.split()[0]}")
 
@@ -375,7 +393,7 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H, _is_static = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------------- WELCOME PAGE --------------------
+# -------------------- WELCOME --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
@@ -394,10 +412,10 @@ if st.session_state.phase == "welcome":
         st.session_state.phase="start"
         st.rerun()
 
-# -------------------- START (mode selection via form to batch events) --------------------
+# -------------------- START (mode + start button) --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
-    with st.form("mode_pick"):
+    with st.form("mode_pick", clear_on_submit=False):
         render_mode_picker(title_on_top=True)
         submitted = st.form_submit_button("Start Game")
     if submitted:
@@ -407,10 +425,9 @@ elif st.session_state.phase == "start":
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
 
-    # Show mode without a form (prevents 'Missing Submit Button' warning)
+    # Flat, borderless container (no form) so it looks clean
     with st.container():
         render_mode_picker(title_on_top=True)
 
-    # Safe fallback if answer missing
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
     play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
