@@ -1,6 +1,7 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Live suggestions on each keystroke (no "Press Enter" banner), big translucent markers (r=30),
-# amber for same line, red otherwise, hidden for correct guess. Calibration removed.
+# LIVE suggestions on every keystroke via a tiny HTML component (no "Press Enter" banner).
+# Big translucent markers (r=30): amber = same line, red = different line, hidden for correct.
+# Calibration removed.
 
 import base64
 import csv
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -211,10 +213,13 @@ st.markdown(
 
       .map-wrap { margin: 0 auto 6px auto !important; }
 
-      .stTextInput { margin-top: 6px !important; margin-bottom: 6px !important; }
-      .stTextInput>div>div>input {
-        text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
+      .live-input-wrap { margin: 6px auto 6px auto; max-width: 680px; }
+      .live-input {
+        width: 100%; height: 44px; line-height: 44px; font-size: 1rem;
+        text-align: center; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);
+        background: transparent; color: inherit; outline: none;
       }
+      .live-input:focus { border-color: rgba(255,255,255,0.35); }
 
       .sugg-list .stButton>button {
         min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px;
@@ -231,7 +236,7 @@ st.markdown(
 # Load assets
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 
-# Session state (note: we do NOT manage the text input via session_state)
+# Session state (we do NOT manage the input value here)
 if "phase" not in st.session_state:
     st.session_state.phase="start"
     st.session_state.mode="daily"
@@ -305,14 +310,33 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         )
 
         if st.session_state.phase == "play":
-            # IMPORTANT: no key here, and we never write to this widget -> live updates every keystroke
-            q_now = st.text_input(
-                "Type to search stations",
-                placeholder="Start typing…",
-                label_visibility="collapsed"
+            # --- Live-keystroke input via a tiny HTML component ---
+            q_now = components.html(
+                """
+                <div class="live-input-wrap">
+                  <input id="liveq" class="live-input" placeholder="Start typing…" autofocus />
+                </div>
+                <script>
+                  const send = (v) => {
+                    window.parent.postMessage(
+                      {type: 'streamlit:setComponentValue', value: v},
+                      '*'
+                    );
+                  };
+                  const el = document.getElementById('liveq');
+                  // Keep cursor focus and stream value on every keystroke
+                  el.addEventListener('input', () => send(el.value));
+                  // Initial emit so Streamlit has an empty string first run
+                  send('');
+                </script>
+                """,
+                height=60,
+                scrolling=False,
+                key="live_textbox"
             )
 
-            sugg = prefix_suggestions(q_now, NAMES, limit=5)
+            # q_now is the current input value (updates on each keystroke)
+            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
                 for s in sugg:
@@ -342,7 +366,11 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         post = st.container()
         with post:
             if st.session_state.history:
-                st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="post-input">**Your guesses:** ' +
+                    ", ".join(st.session_state.history) + "</div>",
+                    unsafe_allow_html=True
+                )
             st.caption(f"Guesses left: {st.session_state.remaining}")
 
     if st.session_state.phase == "end":
