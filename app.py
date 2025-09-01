@@ -1,4 +1,5 @@
-# Tube Guessr — header padding, zero map->input gap, nicer suggestion spacing, custom result cards
+# Tube Guessr — mobile-safe grayscale (SVG feColorMatrix + CSS fallback),
+# zero map->input gap, wider suggestion spacing, custom result cards
 
 import base64
 import csv
@@ -77,12 +78,13 @@ GLOBAL_CSS = """
   }
 
   /* Suggestion list spacing & subtle separation */
-  .sugg-list { margin-top: 6px; }
-  .sugg-list .stButton { margin-bottom: 8px !important; }
+  .sugg-list { margin-top: 8px; }
+  .sugg-list div.element-container { margin-bottom: 12px !important; }
   .sugg-list .stButton>button {
     width: 100%;
-    border-radius: 12px;
-    box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
+    border-radius: 14px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
+    padding: 12px 16px;
   }
 
   .post-input { margin-top: 8px; font-size: .95rem; }
@@ -92,6 +94,17 @@ GLOBAL_CSS = """
   .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
   .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
 </style>
+"""
+
+# Mobile-safe grayscale SVG filter (feColorMatrix)
+GRAY_FILTER_DEF = """
+<filter id="gray">
+  <feColorMatrix type="matrix"
+    values="0.2126 0.7152 0.0722 0 0
+            0.2126 0.7152 0.0722 0 0
+            0.2126 0.7152 0.0722 0 0
+            0      0      0      1 0"/>
+</filter>
 """
 
 # -------------------- DATA --------------------
@@ -227,10 +240,16 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Returns HTML (no iframe). Grayscale via CSS filter (no SVG <defs> needed).
+    Returns HTML (no iframe). To be robust on mobile:
+    - Add <defs><filter id="gray"> feColorMatrix ... </filter></defs>
+    - When grayscale is required, set BOTH SVG filter attr AND CSS filter on the <image>.
+      Many mobile browsers honor at least one of the two.
     """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-    image_style = 'filter: none;' if colorize else 'filter: grayscale(1);'
+
+    # Fallbacks: use both CSS filter and SVG filter for maximum cross-browser support
+    css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
+    svg_gray  = "" if colorize else 'filter="url(#gray)"'
 
     overlay_svg = ""
     if overlays:
@@ -243,9 +262,11 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
+        <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
-          <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
+          <image href="{svg_uri}" width="{baseW}" height="{baseH}" {svg_gray} style="{css_gray}"/>
         </g>
+        <!-- Ring & overlays are outside the grayscale, so they remain colored -->
         <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}" stroke="{ring_color}"
                 stroke-width="{RING_STROKE}" fill="none"
                 style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
@@ -289,8 +310,8 @@ def render_mode_picker(title_on_top=False):
     )
     st.session_state.mode = choice
 
-def centered_play(label, key=None):
-    st.markdown('<div class="play-center">', unsafe_allow_html=True)
+def centered_play(label, key=None, top_margin_px: int = 0):
+    st.markdown(f'<div class="play-center" style="margin-top:{top_margin_px}px;">', unsafe_allow_html=True)
     clicked = st.button(label, type="primary", key=key)
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
@@ -374,7 +395,8 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                 st.markdown(success_card("Correct!"), unsafe_allow_html=True)
             else:
                 st.markdown(error_card(f"Out of guesses. The station was <b>{answer.name}</b>."), unsafe_allow_html=True)
-            if centered_play("Play again", key="play_again_btn"):
+            # Lower the Play again button a bit
+            if centered_play("Play again", key="play_again_btn", top_margin_px=16):
                 if start_round(stations, by_key, names): st.rerun()
 
 # -------------------- APP --------------------
@@ -394,7 +416,6 @@ if "feedback" not in st.session_state:
 
 # Load assets & data
 def _load_svg(svg_path: Path) -> Tuple[str, float, float, bool]:
-    # wrapper to call cached function defined above
     return load_svg_data(svg_path)
 
 SVG_URI, SVG_W, SVG_H, _is_static = _load_svg(SVG_PATH)
