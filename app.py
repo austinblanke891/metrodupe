@@ -1,4 +1,4 @@
-# Tube Guessr — safe map render (no DOM error), guess bar right under map, fragment polyfill & caching
+# Tube Guessr — safe map render + zero spacing under map, fragment polyfill & caching
 
 import base64
 import csv
@@ -57,9 +57,10 @@ MAX_GUESSES = 6
 # -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: 0.6rem; }
+  .block-container { max-width: 1100px; padding-top: 1.0rem; padding-bottom: 0.5rem; }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
+  /* Remove borders/boxes */
   .stForm, .stContainer { border: none !important; box-shadow: none !important; }
 
   /* Radios */
@@ -74,14 +75,25 @@ GLOBAL_CSS = """
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
+  /* ======= CRUSH VERTICAL GAPS (map + input hug) ======= */
+  /* Streamlit stacks each element in a "VerticalBlock" with default row-gap.
+     Reduce that globally to a tiny value, so elements sit close together. */
+  section.main div[data-testid="stVerticalBlock"] { row-gap: 4px !important; }
+
+  /* Reduce default bottom margins of element containers */
+  section.main div.element-container { margin-bottom: 0 !important; }
+
+  /* Markdown containers sometimes add extra space */
+  section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+
   /* Map wrapper: zero bottom gap */
   .map-wrap { margin: 0 auto 0 auto !important; }
 
-  /* Kill any extra spacing under the iframe used by components.html */
+  /* Kill any spacing under the iframe used by components.html/st.html */
   [data-testid="stIFrame"] { margin: 0 !important; padding: 0 !important; display: block; }
 
   /* Guess input sits snug under map */
-  .stTextInput { margin-top: 0 !important; margin-bottom: 2px !important; }
+  .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
   }
@@ -247,7 +259,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     else:
         overlay_svg = ""
 
-    # Wrapper has zero bottom margin; we will render using an iframe with zero spacing too.
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%"
@@ -324,10 +335,10 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # SAFE map render (iframe or st.html) with zero extra gap
+        # SAFE map render with zero gap
         render_html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            height=VIEW_H,  # exact height → input sits right below
+            height=VIEW_H
         )
 
         # Guess input immediately under the map
