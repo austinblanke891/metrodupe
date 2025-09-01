@@ -1,4 +1,4 @@
-# Tube Guessr — Public (radio buttons for mode + centered Play)
+# Tube Guessr — Public (welcome -> start flow; choose mode once on Start)
 # Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
 
 import base64
@@ -209,7 +209,7 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Global CSS (compact layout + centered play)
+# Global CSS
 st.markdown(
     """
     <style>
@@ -253,11 +253,10 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------- Helper: simple radio picker + centered play --------------
+# Helpers
 def render_mode_picker(title_on_top=False):
     if title_on_top:
         st.markdown("### Mode")
-    # radio returns the chosen label; keep session_state in sync
     choice = st.radio(
         label="Mode",
         options=["daily", "practice"],
@@ -273,7 +272,7 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- WELCOME PAGE --------------------
+# -------------------- WELCOME PAGE (no mode here) --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
@@ -281,7 +280,6 @@ if st.session_state.phase == "welcome":
         Guess the London Underground station from a zoomed-in crop of the Tube map.
 
         **How to play**
-        - Pick a mode below (Daily = same station for everyone today, Practice = random).
         - Start typing a station name in the search box on the game screen, then press Enter.
         - A list of auto-fill suggestions will appear — click one to submit your guess.
         - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
@@ -289,15 +287,11 @@ if st.session_state.phase == "welcome":
         """
     )
     st.divider()
-
-    st.markdown("### Choose a mode")
-    render_mode_picker(title_on_top=False)
-    st.write("")
     if centered_play("Play"):
         st.session_state.phase="start"
         st.rerun()
 
-# -------------------- START --------------------
+# -------------------- START (choose mode once here) --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
