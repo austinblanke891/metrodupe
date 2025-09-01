@@ -19,9 +19,9 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620          # viewport for the crop (px)
-ZOOM        = 3.0                  # zoom into the answer
-RING_PX     = 28                   # center ring radius (px)
+VIEW_W, VIEW_H = 980, 620
+ZOOM        = 3.0
+RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
@@ -29,8 +29,8 @@ MAX_GUESSES = 6
 @dataclass
 class Station:
     name: str
-    fx: float   # fractional X in full SVG (0..1)
-    fy: float   # fractional Y in full SVG (0..1)
+    fx: float
+    fy: float
     lines: List[str]
     @property
     def key(self) -> str:
@@ -112,7 +112,6 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
-    """Return (data_uri, baseW, baseH) for the blank map SVG."""
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -132,7 +131,6 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
 
 # -------------------- GEOMETRY / SVG RENDER --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
-    """Translate+scale so the answer lands at the viewport center."""
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -142,7 +140,6 @@ def project_to_screen(baseW: float, baseH: float,
                       fx_target: float, fy_target: float,
                       fx_center: float, fy_center: float,
                       zoom: float) -> Tuple[float, float]:
-    """Project (fx,fy) into the centered viewport."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     x = fx_target * baseW * zoom + tx
     y = fy_target * baseH * zoom + ty
@@ -152,7 +149,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """Inline SVG crop with overlays = [(x,y,color,r), ...] in viewport px."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
@@ -213,7 +209,7 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon="🗺️", layout="wide")
 
-# Global CSS (spacing; mobile-friendly; big mode buttons)
+# Global CSS
 st.markdown(
     """
     <style>
@@ -235,7 +231,6 @@ st.markdown(
 
       .play-again .stButton>button { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; }
 
-      /* Big Mode Buttons */
       .mode-btn > button {
         width: 100%;
         padding: 14px 18px;
@@ -243,9 +238,6 @@ st.markdown(
         border-radius: 12px;
       }
       .mode-row { gap: 12px; }
-      @media (max-width: 640px) {
-        .mode-row { gap: 8px; }
-      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -253,7 +245,7 @@ st.markdown(
 
 # Session state
 if "phase" not in st.session_state:
-    st.session_state.phase="welcome"    # show welcome page first
+    st.session_state.phase="welcome"
     st.session_state.mode="daily"
     st.session_state.answer=None
     st.session_state.remaining=MAX_GUESSES
@@ -266,43 +258,35 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------- Helper: Big mode picker (Daily / Practice) --------------
-def render_mode_picker(centered: bool = True):
-    cols = st.columns([1,1]) if not centered else st.columns([1,1], gap="small")
+# -------------- Helper: Big mode picker --------------
+def render_mode_picker():
+    cols = st.columns([1,1])
     with cols[0]:
-        if st.container().button("🎯 Daily", key="mode_daily_btn", type=("primary" if st.session_state.mode=="daily" else "secondary"), use_container_width=True):
+        if st.button("Daily", key="mode_daily_btn", type=("primary" if st.session_state.mode=="daily" else "secondary"), use_container_width=True):
             st.session_state.mode = "daily"
     with cols[1]:
-        if st.container().button("🎲 Practice", key="mode_practice_btn", type=("primary" if st.session_state.mode=="practice" else "secondary"), use_container_width=True):
+        if st.button("Practice", key="mode_practice_btn", type=("primary" if st.session_state.mode=="practice" else "secondary"), use_container_width=True):
             st.session_state.mode = "practice"
-    # Add class to style both buttons uniformly
-    st.markdown("""
-      <script>
-        const btns = window.parent.document.querySelectorAll('button[kind]');
-        btns.forEach(b=>{ if(!b.parentElement.classList.contains('mode-btn')) b.parentElement.classList.add('mode-btn'); });
-      </script>
-    """, unsafe_allow_html=True)
 
 # -------------------- WELCOME PAGE --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
         """
-        Guess the London Underground station from a **zoomed-in crop** of the Tube map.
+        Guess the London Underground station from a zoomed-in crop of the Tube map.
 
         **How to play**
-        - Pick a mode below (**Daily** = same station for everyone today, **Practice** = random).
-        - **Start typing** a station name in the search box on the game screen, **then press Enter**.
-        - A list of **auto-fill suggestions** will appear — **click a suggestion** to submit your guess.
-        - If your guess is wrong **but on the correct line**, we’ll tell you (map tint turns amber).
-        - You have **6 guesses**. Good luck!
+        - Pick a mode below (Daily = same station for everyone today, Practice = random).
+        - Start typing a station name in the search box on the game screen, then press Enter.
+        - A list of auto-fill suggestions will appear — click one to submit your guess.
+        - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
+        - You have 6 guesses.
         """
     )
     st.divider()
 
     st.markdown("### Choose a mode")
     render_mode_picker()
-
     st.write("")
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
@@ -310,7 +294,7 @@ if st.session_state.phase == "welcome":
             st.session_state.phase="start"
             st.rerun()
 
-# -------------------- START (mode confirmation) --------------------
+# -------------------- START --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     st.markdown("### Choose a mode")
@@ -325,11 +309,9 @@ elif st.session_state.phase == "start":
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
 
-    # Mode (still switchable mid-game if you want)
     st.markdown("### Mode")
-    render_mode_picker(centered=False)
+    render_mode_picker()
 
-    # Build overlays for wrong guesses visible in the crop (ANSWER is center)
     answer: Station = st.session_state.answer or STATIONS[0]
     colorize=False
     if st.session_state.history:
@@ -340,14 +322,13 @@ elif st.session_state.phase in ("play","end"):
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
-        if not st_obj or st_obj.key == answer.key:  # hide ring for correct
+        if not st_obj or st_obj.key == answer.key:
             continue
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))  # large translucent marker
+            overlays.append((sx, sy, color, 30.0))
 
-    # Centered map
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         st.markdown(
@@ -355,15 +336,13 @@ elif st.session_state.phase in ("play","end"):
             unsafe_allow_html=True
         )
 
-        # Input and suggestions
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
                 key="live_guess_box",
-                placeholder="Start typing… then press Enter to refresh suggestions",
+                placeholder="Start typing… then press Enter",
                 label_visibility="collapsed",
             )
-
             sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
@@ -379,28 +358,26 @@ elif st.session_state.phase in ("play","end"):
                         else:
                             if chosen and same_line(chosen, answer):
                                 lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
-                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
+                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
                             else:
-                                st.session_state["feedback"] = "❌ Wrong station."
+                                st.session_state["feedback"] = "Wrong station."
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # Feedback + status
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
         if st.session_state.history:
             st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
         st.caption(f"Guesses left: {st.session_state.remaining}")
 
-    # End screen
     if st.session_state.phase == "end":
         _l, c, _r = st.columns([1,1,1])
         with c:
             if st.session_state.won:
-                st.success("Nice! You got it.")
+                st.success("Correct!")
             else:
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
             st.markdown('<div class="play-again">', unsafe_allow_html=True)
