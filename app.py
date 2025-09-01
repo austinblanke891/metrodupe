@@ -1,4 +1,4 @@
-# Tube Guessr — faster Streamlit version (fragments, caching, static SVG, forms)
+# Tube Guessr — smoother Streamlit version with fragment polyfill & caching
 
 import base64
 import csv
@@ -11,13 +11,28 @@ from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 
+# ---- compat: st.fragment / st.experimental_fragment polyfill ----
+# Use real st.fragment if available; otherwise experimental; otherwise no-op.
+try:
+    st_fragment = st.fragment  # Streamlit ≥ version that exposes .fragment
+except AttributeError:
+    try:
+        st_fragment = st.experimental_fragment  # some older versions
+    except AttributeError:
+        def st_fragment(func=None, **kwargs):
+            if func is None:
+                def _wrap(f): return f
+                return _wrap
+            return func
+# -----------------------------------------------------------------
+
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback SVG (if /static/ not used)
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback SVG if not using /static
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
-# Optional recommended static path (served by Streamlit when enableStaticServing=true)
+# Optional recommended static path (served when [server].enableStaticServing = true)
 STATIC_SVG_URL = "/static/tube_map_clean.svg"     # Put file at .streamlit/static/tube_map_clean.svg
 
 # -------------------- TUNING --------------------
@@ -155,24 +170,22 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
     Returns (svg_uri, base_w, base_h, is_static).
     Prefers static URL (/static/...) if present; else falls back to data URI.
     """
-    # If static file exists, use it (browser caches it across reruns)
     static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
     if static_fs.exists():
         raw = static_fs.read_bytes()
         txt = raw.decode("utf-8", errors="ignore")
-        base_w, base_h = _infer_svg_dimensions(txt, raw)
+        base_w, base_h = _infer_svg_dimensions(txt)
         return STATIC_SVG_URL, base_w, base_h, True
 
-    # Fallback: use your existing file and data URI (still cached at resource level)
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
-    base_w, base_h = _infer_svg_dimensions(txt, raw)
+    base_w, base_h = _infer_svg_dimensions(txt)
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h, False
 
-def _infer_svg_dimensions(txt: str, raw_bytes: bytes) -> Tuple[float, float]:
+def _infer_svg_dimensions(txt: str) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
@@ -201,7 +214,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     image_style = '' if colorize else 'filter:url(#gray);'
 
-    # Build overlay circles
     if overlays:
         parts = [
             f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
@@ -261,9 +273,9 @@ def centered_play(label, key=None):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- FRAGMENT: PLAY AREA --------------------
-@st.fragment
-def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_h):
+# -------------------- FRAGMENT: PLAY AREA (uses polyfilled decorator) --------------------
+@st_fragment
+def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
     # Determine colorization based on last guess
     colorize = False
     if st.session_state.history:
@@ -276,7 +288,7 @@ def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_
     # Precompute transform once
     tx, ty = css_transform(svg_w, svg_h, answer.fx, answer.fy, ZOOM)
 
-    # Overlays: compute using precomputed tx,ty
+    # Overlays
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, by_key)
@@ -294,7 +306,6 @@ def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_
             unsafe_allow_html=True
         )
 
-        # Input + suggestions (live inside fragment → partial reruns only here)
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -323,7 +334,7 @@ def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
-                        st.rerun()  # keep this to jump to end state immediately
+                        st.rerun()
 
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
@@ -344,6 +355,10 @@ def play_fragment(answer: Station, stations, by_key, names, svg_uri, svg_w, svg_
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+
+# Helpful runtime info (shows what the host actually runs)
+import sys
+st.caption(f"Running Streamlit {getattr(st, '__version__', 'unknown')} on Python {sys.version.split()[0]}")
 
 # Session state init
 if "phase" not in st.session_state:
@@ -391,11 +406,9 @@ elif st.session_state.phase == "start":
 # -------------------- PLAY / END --------------------
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
-    # This simple form prevents extra reruns when toggling mode during play
+    # Inline “mode” display; no submit button during play
     with st.form("mode_inline_form", clear_on_submit=False):
         render_mode_picker(title_on_top=True)
-        # No submit button; purely informational during play
-
-    # Use a safe fallback if answer missing
+    # Safe fallback if answer missing
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?",0.5,0.5,[]))
     play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
