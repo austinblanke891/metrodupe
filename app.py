@@ -1,4 +1,4 @@
-# Tube Guessr — Public (with Welcome Page + big mode buttons)
+# Tube Guessr — Public (with Welcome Page + card mode selector)
 # Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
 
 import base64
@@ -207,9 +207,9 @@ def start_round(stations, by_key, names):
     return True
 
 # -------------------- STREAMLIT APP --------------------
-st.set_page_config(page_title="Tube Guessr", page_icon="🗺️", layout="wide")
+st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Global CSS
+# Global CSS (layout + card selector)
 st.markdown(
     """
     <style>
@@ -228,16 +228,24 @@ st.markdown(
       }
 
       .post-input { margin-top: 6px; }
-
       .play-again .stButton>button { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; }
 
-      .mode-btn > button {
-        width: 100%;
-        padding: 14px 18px;
-        font-size: 1.05rem;
-        border-radius: 12px;
+      /* Card selector */
+      .mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      @media (max-width: 680px) { .mode-cards { grid-template-columns: 1fr; } }
+      .mode-card {
+        border: 1px solid rgba(255,255,255,.15);
+        background: rgba(255,255,255,.04);
+        border-radius: 14px;
+        padding: 16px;
       }
-      .mode-row { gap: 12px; }
+      .mode-card.selected { border: 2px solid #ef4444; background: rgba(239,68,68,.08); }
+      .mode-card .stButton>button {
+        width: 100%; height: 84px;
+        border-radius: 10px;
+        font-size: 1.05rem;
+      }
+      .mode-subtext { margin-top: 6px; opacity: .8; font-size: .92rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -258,15 +266,27 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------- Helper: Big mode picker --------------
-def render_mode_picker():
-    cols = st.columns([1,1])
-    with cols[0]:
-        if st.button("Daily", key="mode_daily_btn", type=("primary" if st.session_state.mode=="daily" else "secondary"), use_container_width=True):
-            st.session_state.mode = "daily"
-    with cols[1]:
-        if st.button("Practice", key="mode_practice_btn", type=("primary" if st.session_state.mode=="practice" else "secondary"), use_container_width=True):
-            st.session_state.mode = "practice"
+# -------------- Helper: Card mode selector --------------
+def render_mode_cards():
+    st.markdown('<div class="mode-cards">', unsafe_allow_html=True)
+    # Daily card
+    col1, col2 = st.columns(2) if st.columns else (None, None)  # not used; just to keep layout consistent
+    selected_daily = (st.session_state.mode == "daily")
+    st.markdown(f'<div class="mode-card {"selected" if selected_daily else ""}">', unsafe_allow_html=True)
+    if st.button("Daily", key="mode_daily_card", use_container_width=True):
+        st.session_state.mode = "daily"
+    st.markdown('<div class="mode-subtext">Same station for everyone today</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Practice card
+    selected_practice = (st.session_state.mode == "practice")
+    st.markdown(f'<div class="mode-card {"selected" if selected_practice else ""}">', unsafe_allow_html=True)
+    if st.button("Practice", key="mode_practice_card", use_container_width=True):
+        st.session_state.mode = "practice"
+    st.markdown('<div class="mode-subtext">Random station each game</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------- WELCOME PAGE --------------------
 if st.session_state.phase == "welcome":
@@ -286,7 +306,7 @@ if st.session_state.phase == "welcome":
     st.divider()
 
     st.markdown("### Choose a mode")
-    render_mode_picker()
+    render_mode_cards()
     st.write("")
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
@@ -298,7 +318,7 @@ if st.session_state.phase == "welcome":
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     st.markdown("### Choose a mode")
-    render_mode_picker()
+    render_mode_cards()
     st.write("")
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
@@ -310,7 +330,7 @@ elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
 
     st.markdown("### Mode")
-    render_mode_picker()
+    render_mode_cards()
 
     answer: Station = st.session_state.answer or STATIONS[0]
     colorize=False
