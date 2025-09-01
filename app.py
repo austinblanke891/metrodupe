@@ -26,12 +26,13 @@ except AttributeError:
             return func
 # -----------------------------------------------------------------
 
-# ---- safe HTML render helper ----
+# ---- safe HTML render helper (handles st.html signature differences) ----
 def render_html(html: str, *, height: int):
     """Try st.html when available, else fallback to components.v1.html."""
     try:
         if hasattr(st, "html") and callable(getattr(st, "html")):
-            st.html(body=html, height=height, scrolling=False)  # keyword "body" works across versions
+            # 'body' keyword works across minor versions that expose st.html
+            st.html(body=html, height=height, scrolling=False)  # type: ignore[call-arg]
             return
     except Exception:
         pass
@@ -40,10 +41,11 @@ def render_html(html: str, *, height: int):
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Fallback if not serving via /static
 DB_PATH  = BASE_DIR / "stations_db.csv"
 
-STATIC_SVG_URL = "/static/tube_map_clean.svg"
+# Optional static path (enable via .streamlit/config.toml -> enableStaticServing=true)
+STATIC_SVG_URL = "/static/tube_map_clean.svg"     # Put file at .streamlit/static/tube_map_clean.svg
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -58,33 +60,41 @@ GLOBAL_CSS = """
   .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: 0.6rem; }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
+  /* Remove borders/boxes */
   .stForm, .stContainer { border: none !important; box-shadow: none !important; }
 
+  /* Radio group */
   div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
 
+  /* Buttons (primary look) */
   .stButton>button {
     min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
     background: #2563eb; color: white; border: none;
   }
   .stButton>button:hover { background: #1d4ed8; }
 
+  /* Center helper */
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
+  /* Text input — super tight */
   .stTextInput { margin-top: 0 !important; margin-bottom: 2px !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
     border-radius: 10px;
   }
 
+  /* Suggestion buttons */
   .sugg-list .stButton>button {
     min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%;
   }
 
   .post-input { margin-top: 6px; font-size: 0.95rem; }
 
+  /* Map wrapper: absolutely minimal gap */
   .map-wrap { margin: 0 auto 0 auto !important; }
 
+  /* If components uses an iframe, kill any default spacing under it */
   [data-testid="stIFrame"] { margin-bottom: 0 !important; padding-bottom: 0 !important; }
 </style>
 """
@@ -187,6 +197,10 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
+    """
+    Returns (svg_uri, base_w, base_h, is_static).
+    Prefers static URL (/static/...) if present; else falls back to data URI.
+    """
     static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
     if static_fs.exists():
         raw = static_fs.read_bytes()
@@ -290,13 +304,19 @@ def centered_play(label, key=None):
 # -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
 def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
+    # Colorization hint based on last guess
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], by_key)
         if last and same_line(last, answer):
             colorize = True
+
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
+
+    # Precompute transform once
     tx, ty = css_transform(svg_w, svg_h, answer.fx, answer.fy, ZOOM)
+
+    # Overlays
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, by_key)
@@ -306,12 +326,16 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
+
     _L, mid, _R = st.columns([1,2,1])
     with mid:
+        # Map (no bottom gap); height == VIEW_H for exact fit
         render_html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
             height=VIEW_H
         )
+
+        # Guess input directly under map with 0 top margin
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -341,11 +365,13 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
                         st.rerun()
+
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
         if st.session_state.history:
             st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
         st.caption(f"Guesses left: {st.session_state.remaining}")
+
     if st.session_state.phase == "end":
         _l, c, _r = st.columns([1,1,1])
         with c:
@@ -360,6 +386,7 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
+# Session state init
 if "phase" not in st.session_state:
     st.session_state.phase="welcome"
     st.session_state.mode="daily"
@@ -370,9 +397,11 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
+# Load assets & data (cached)
 SVG_URI, SVG_W, SVG_H, _is_static = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
+# -------------------- ROUTING --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
@@ -399,3 +428,17 @@ elif st.session_state.phase == "start":
     if submitted:
         if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
+elif st.session_state.phase in ("play", "end"):
+    st.markdown("# Tube Guessr")
+
+    # Flat, borderless container (no form) so it looks clean
+    with st.container():
+        render_mode_picker(title_on_top=True)
+
+    answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
+    play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
+
+else:
+    # Failsafe: go back to welcome if state gets weird
+    st.session_state.phase = "welcome"
+    st.experimental_rerun()
