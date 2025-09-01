@@ -1,4 +1,4 @@
-# Tube Guessr — safe map render + ZERO spacing under map, fragment polyfill & caching
+# Tube Guessr — map via st.markdown (no iframe), ZERO spacing, fragment polyfill & caching
 
 import base64
 import csv
@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-from streamlit import components
 
 # ---------- fragment polyfill ----------
 try:
@@ -25,18 +24,6 @@ except AttributeError:
                 return _wrap
             return func
 # ---------------------------------------
-
-# ---------- robust HTML render (st.html when available, else components.html) ----------
-def render_html(html: str, *, height: int):
-    """Render raw HTML safely and consistently across Streamlit versions."""
-    try:
-        if hasattr(st, "html") and callable(getattr(st, "html")):
-            # 'body' keyword works across minor st.html variants
-            st.html(body=html, height=height, scrolling=False)  # type: ignore[call-arg]
-            return
-    except Exception:
-        pass
-    components.v1.html(html, height=height, scrolling=False)
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -57,16 +44,18 @@ MAX_GUESSES = 6
 # -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  .block-container { max-width: 1100px; padding-top: 1.0rem; padding-bottom: 0.5rem; }
+  .block-container { max-width: 1100px; padding-top: 1rem; padding-bottom: .5rem; }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove Streamlit card borders */
-  .stForm, .stContainer { border: none !important; box-shadow: none !important; }
+  /* Remove Streamlit card borders & gaps */
+  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+  section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 
   /* Radios */
   div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
 
-  /* Primary buttons */
+  /* Buttons */
   .stButton>button {
     min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
     background: #2563eb; color: #fff; border: none;
@@ -75,22 +64,11 @@ GLOBAL_CSS = """
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
-  /* ======= REMOVE ALL AUTOMATIC VERTICAL GAPS ======= */
-  /* Each stack of elements lives in a VerticalBlock -> crush the row-gap */
-  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
-  /* Element wrappers add bottom margin -> remove it */
-  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
-  /* Markdown container sometimes adds space */
-  section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
-
-  /* Map wrapper (no bottom gap) */
+  /* Map & guess: flush stacking */
   .map-wrap { margin: 0 auto 0 auto !important; }
-
-  /* If iframe is used for HTML, remove its spacing */
-  [data-testid="stIFrame"] { margin: 0 !important; padding: 0 !important; display: block; }
-
-  /* Guess input sits flush under map */
   .guess-wrap { margin: 0 !important; padding: 0 !important; }
+
+  /* Guess input flush under map */
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
@@ -99,16 +77,6 @@ GLOBAL_CSS = """
   .sugg-list .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 6px; width: 100%; }
   .post-input { margin-top: 6px; font-size: .95rem; }
 </style>
-"""
-
-GRAY_FILTER_DEF = """
-<filter id="gray">
-  <feColorMatrix type="matrix"
-    values="0.2126 0.7152 0.0722 0 0
-            0.2126 0.7152 0.0722 0 0
-            0.2126 0.7152 0.0722 0 0
-            0      0      0      1 0"/>
-</filter>
 """
 
 # -------------------- DATA --------------------
@@ -243,25 +211,25 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-
+    """Return HTML string that Streamlit can inject directly (no iframe)."""
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-    image_style = '' if colorize else 'filter:url(#gray);'
 
+    # Use CSS grayscale instead of <filter> to avoid DOM/JS issues
+    image_style = 'filter: none;' if colorize else 'filter: grayscale(1);'
+
+    overlay_svg = ""
     if overlays:
-        parts = [
+        overlay_svg = "\n".join(
             f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
             f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" /></g>'
             for (sx, sy, color, rr) in overlays
-        ]
-        overlay_svg = "\n".join(parts)
-    else:
-        overlay_svg = ""
+        )
 
+    # Wrapper has zero margin-bottom; SVG is responsive and natural-height;
+    # placing the Streamlit input right after this block yields flush stacking.
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%"
-           style="display:block;border-radius:14px;background:#0f1115;">
-        <defs>{GRAY_FILTER_DEF}</defs>
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
         <g transform="translate({tx},{ty}) scale({zoom})">
           <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
         </g>
@@ -333,13 +301,13 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # SAFE map render (no DOM error)
-        render_html(
+        # Map (no iframe, natural height)
+        st.markdown(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            height=VIEW_H
+            unsafe_allow_html=True
         )
 
-        # Guess input wrapped directly after map with ZERO spacing
+        # Guess input immediately under the map (same VerticalBlock, zero margins)
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
         if st.session_state.phase == "play":
             q_now = st.text_input(
