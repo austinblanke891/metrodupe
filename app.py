@@ -1,7 +1,5 @@
-# Metrodle Dupe — Public (pixel-accurate inline SVG crop with fragments for smooth typing)
-# Live suggestions re-render ONLY the input area via st.fragment (no full-page flicker while typing).
-# Big translucent markers (r=30): amber = same line, red = different line, hidden for correct.
-# Calibration removed.
+# Metrodle Dupe — Public (with Welcome Page)
+# Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
 
 import base64
 import csv
@@ -21,7 +19,7 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620          # viewport (px) for crop
+VIEW_W, VIEW_H = 980, 620          # viewport for the crop (px)
 ZOOM        = 3.0                  # zoom into the answer
 RING_PX     = 28                   # center ring radius (px)
 RING_STROKE = 6
@@ -31,8 +29,8 @@ MAX_GUESSES = 6
 @dataclass
 class Station:
     name: str
-    fx: float   # frac X in full SVG (0..1)
-    fy: float   # frac Y in full SVG (0..1)
+    fx: float   # fractional X in full SVG (0..1)
+    fy: float   # fractional Y in full SVG (0..1)
     lines: List[str]
     @property
     def key(self) -> str:
@@ -75,7 +73,7 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
         for r in rdr:
             try:
                 name = clean_display(r["name"])
-                fx = float(r["fx"]); fy = float(r["fy"])  # type: ignore
+                fx = float(r["fx"]); fy = float(r["fy"])
                 lines = normalize_lines(r.get("lines", "").split(";"))
                 if 0 <= fx <= 1 and 0 <= fy <= 1 and name:
                     stations.append(Station(name, fx, fy, lines))
@@ -197,20 +195,34 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     </div>
     """
 
+# -------------------- GAME HELPERS --------------------
+def start_round(stations, by_key, names):
+    if not stations:
+        st.warning("No stations found in stations_db.csv.")
+        return False
+    st.session_state.phase="play"
+    st.session_state.history=[]
+    st.session_state.remaining=MAX_GUESSES
+    st.session_state.won=False
+    st.session_state["feedback"] = ""
+    rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
+    choice_name = rng.choice(names)
+    st.session_state.answer = by_key[norm(choice_name)]
+    return True
+
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Metrodle Dupe", page_icon="🗺️", layout="wide")
-st.markdown("# Metrodle Dupe")
 
-# Global CSS
+# Global CSS (spacing; mobile-friendly)
 st.markdown(
     """
     <style>
-      .block-container { max-width: 1100px; padding-top: 2.0rem; padding-bottom: 1rem; }
+      .block-container { max-width: 1100px; padding-top: 1.75rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
-      .map-wrap { margin: 0 auto 6px auto !important; }
+      .map-wrap { margin: 0 auto 8px auto !important; }
 
-      .stTextInput { margin-top: 6px !important; margin-bottom: 6px !important; }
+      .stTextInput { margin-top: 6px !important; margin-bottom: 8px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
@@ -227,12 +239,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Load assets
-SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
-
 # Session state
 if "phase" not in st.session_state:
-    st.session_state.phase="start"
+    st.session_state.phase="welcome"    # <— NEW: show welcome page first
     st.session_state.mode="daily"
     st.session_state.answer=None
     st.session_state.remaining=MAX_GUESSES
@@ -241,36 +250,54 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-# Mode picker
-c1, _, _ = st.columns([1,1,1])
-with c1:
-    st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
-
+# Load assets & data
+SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------- Game helpers --------
-def start_round() -> bool:
-    if not STATIONS:
-        st.warning("No stations found in stations_db.csv. (Private calibration required.)")
-        return False
-    st.session_state.phase="play"
-    st.session_state.history=[]
-    st.session_state.remaining=MAX_GUESSES
-    st.session_state.won=False
-    st.session_state["feedback"] = ""
-    rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
-    choice_name = rng.choice(NAMES)
-    st.session_state.answer = BY_KEY[norm(choice_name)]
-    return True
+# -------------------- WELCOME PAGE --------------------
+if st.session_state.phase == "welcome":
+    st.markdown("# Metrodle Dupe")
+    st.markdown(
+        """
+        Guess the London Underground station by looking at a **zoomed-in crop** of the Tube map.
 
-if st.session_state.phase=="start":
-    _l, c, _r = st.columns([1,1,1])
-    with c:
+        **How to play**
+        - Choose **Daily** (same station for everyone today) or **Practice** (random each time).
+        - Look at the cropped map and **start typing a station**.
+        - Click one of the **suggestions** to make a guess.
+        - If you’re wrong **but on the correct line**, we’ll tell you (map tint turns amber).
+        - You have **6 guesses**. Good luck!
+
+        👉 Tap **Play** to begin.
+        """
+    )
+    st.divider()
+    c1, c2, c3 = st.columns([1,1,1])
+    with c2:
+        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
+        if st.button("Play", type="primary", use_container_width=True):
+            st.session_state.phase="start"
+            st.rerun()
+
+# -------------------- START (mode confirmation) --------------------
+elif st.session_state.phase == "start":
+    st.markdown("# Metrodle Dupe")
+    c1, c2, c3 = st.columns([1,1,1])
+    with c2:
+        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
         if st.button("Start Game", type="primary", use_container_width=True):
-            if start_round(): st.rerun()
+            if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
-# -------------------- MAIN PLAY / END --------------------
-if st.session_state.phase in ("play", "end") and STATIONS:
+# -------------------- PLAY / END --------------------
+elif st.session_state.phase in ("play","end"):
+    st.markdown("# Metrodle Dupe")
+
+    # Mode (still switchable mid-game if you want)
+    c1, _, _ = st.columns([1,1,1])
+    with c1:
+        st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
+
+    # Build overlays for wrong guesses visible in the crop (ANSWER is center)
     answer: Station = st.session_state.answer or STATIONS[0]
     colorize=False
     if st.session_state.history:
@@ -278,7 +305,6 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build overlays for wrong guesses visible in the crop (ANSWER is center)
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
@@ -287,27 +313,18 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))  # 3× diameter-ish
+            overlays.append((sx, sy, color, 30.0))  # large translucent marker
 
+    # Centered map
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map (does NOT re-render while typing; see fragment below)
         st.markdown(
             make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
-        # --------- FRAGMENT: only this input + suggestions area reruns on keystrokes ---------
-        try:
-            fragment = st.fragment  # Streamlit >= 1.32
-        except AttributeError:
-            def fragment(func=None, *fargs, **fkwargs):
-                def deco(f): return f
-                return deco if func is None else deco(func)
-
-        @fragment
-        def guess_fragment(names, by_key, answer_obj):
-            # IMPORTANT: never programmatically set/delete this key elsewhere
+        # Input and suggestions
+        if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
                 key="live_guess_box",
@@ -315,39 +332,31 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                 label_visibility="collapsed",
             )
 
-            sugg = prefix_suggestions(q_now or "", names, limit=5)
-            picked = None
+            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
                 for s in sugg:
                     if st.button(s, key=f"sugg_{s}", use_container_width=True):
-                        picked = s
-                        break
+                        st.session_state.history.append(s)
+                        st.session_state.remaining -= 1
+                        chosen = resolve_guess(s, BY_KEY)
+                        if chosen and chosen.key == answer.key:
+                            st.session_state.won = True
+                            st.session_state.phase = "end"
+                            st.session_state["feedback"] = ""
+                        else:
+                            if chosen and same_line(chosen, answer):
+                                lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
+                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
+                            else:
+                                st.session_state["feedback"] = "❌ Wrong station."
+                            if st.session_state.remaining <= 0:
+                                st.session_state.won = False
+                                st.session_state.phase = "end"
+                        st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            if picked:
-                st.session_state.history.append(picked)
-                st.session_state.remaining -= 1
-                chosen = resolve_guess(picked, by_key)
-                if chosen and chosen.key == answer_obj.key:
-                    st.session_state.won = True
-                    st.session_state.phase = "end"
-                    st.session_state["feedback"] = ""
-                else:
-                    if chosen and same_line(chosen, answer_obj):
-                        lines = ", ".join(overlap_lines(chosen, answer_obj)) or "right line"
-                        st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
-                    else:
-                        st.session_state["feedback"] = "❌ Wrong station."
-                    if st.session_state.remaining <= 0:
-                        st.session_state.won = False
-                        st.session_state.phase = "end"
-                st.rerun()  # one full rerun to refresh map/overlays/history
-
-        if st.session_state.phase == "play":
-            guess_fragment(NAMES, BY_KEY, answer)
-
-        # Feedback + history/status
+        # Feedback + status
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
         if st.session_state.history:
@@ -364,5 +373,5 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
             st.markdown('<div class="play-again">', unsafe_allow_html=True)
             if st.button("Play again", type="primary", use_container_width=True):
-                if start_round(): st.rerun()
+                if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
