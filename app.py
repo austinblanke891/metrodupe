@@ -1,14 +1,12 @@
 # Metrodle Dupe — Public (pixel-accurate + responsive via inline SVG, no iframes)
-# Fix: guess markers now project into the viewport using the ANSWER transform.
-# UI: markers are larger, translucent circles (no pill labels); input below map; suggestions below input.
+# Guess markers: larger translucent circles (r=30), hidden when correct; amber if same line.
+# Suggestions update live while typing. Calibration removed.
 
 import base64
 import csv
 import datetime as dt
-import os
 import random
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -22,7 +20,7 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG shown to users
 DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-populated via your private app
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # fixed geometry viewport
+VIEW_W, VIEW_H = 980, 620        # fixed geometry viewport (used for transforms)
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -115,6 +113,7 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
+    """Return (data_uri, baseW, baseH) for the blank map SVG; infer size from viewBox/width/height."""
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -144,10 +143,7 @@ def project_to_screen(baseW: float, baseH: float,
                       fx_target: float, fy_target: float,
                       fx_center: float, fy_center: float,
                       zoom: float) -> Tuple[float, float]:
-    """
-    Project an arbitrary station (fx_target, fy_target) into the current viewport that
-    is centered on (fx_center, fy_center).
-    """
+    """Project target (fx,fy) into the viewport centered on (fx_center,fy_center)."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     x = fx_target * baseW * zoom + tx
     y = fy_target * baseH * zoom + ty
@@ -174,7 +170,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
-    # Build overlay SVG fragments (bigger translucent circles)
     overlay_svg = ""
     if overlays:
         parts = []
@@ -211,11 +206,7 @@ st.markdown("# Metrodle Dupe")
 st.markdown(
     """
     <style>
-      .block-container {
-        max-width: 1100px;
-        padding-top: 2.0rem;
-        padding-bottom: 1rem;
-      }
+      .block-container { max-width: 1100px; padding-top: 2.0rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
       .map-wrap { margin: 0 auto 6px auto !important; }
@@ -231,9 +222,7 @@ st.markdown(
 
       .post-input { margin-top: 6px; }
 
-      .play-again .stButton>button {
-        font-size: 1.05rem; padding: 12px 22px; border-radius: 10px;
-      }
+      .play-again .stButton>button { font-size: 1.05rem; padding: 12px 22px; border-radius: 10px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -255,7 +244,7 @@ if "guess_text" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-# Mode
+# Mode picker
 c1, _, _ = st.columns([1,1,1])
 with c1:
     st.radio("Mode",["daily","practice"],key="mode",horizontal=True)
@@ -273,7 +262,7 @@ def start_round() -> bool:
     st.session_state.won=False
     st.session_state["feedback"] = ""
     if "guess_text" in st.session_state:
-        del st.session_state["guess_text"]
+        del st.session_state["guess_text"]  # ensures a clean filter box next run
     rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
     choice_name = rng.choice(NAMES)
     st.session_state.answer = BY_KEY[norm(choice_name)]
@@ -301,12 +290,17 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj:
             continue
+        # Skip overlay if the guess is exactly correct (don't show red/amber on top of the answer)
+        if st_obj.key == answer.key:
+            continue
         sx, sy = project_to_screen(SVG_W, SVG_H,
                                    st_obj.fx, st_obj.fy,
                                    answer.fx, answer.fy,
                                    ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            overlays.append((sx, sy, "#ef4444", 10.0))  # larger, translucent red circles
+            # Amber if same line as the answer, else red
+            color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
+            overlays.append((sx, sy, color, 30.0))  # radius=30 (≈3× the original diameter)
 
     # Map with overlays
     _L, mid, _R = st.columns([1,2,1])
@@ -317,6 +311,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
         )
 
         if st.session_state.phase == "play":
+            # LIVE suggestions (no Enter required): text_input triggers a rerun on every keystroke
             q_now = st.text_input("Type to search stations",
                                   key="guess_text",
                                   placeholder="Start typing…",
@@ -337,9 +332,9 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                         else:
                             if picked and same_line(picked, answer):
                                 lines = ", ".join(overlap_lines(picked, answer)) or "right line"
-                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
+                                st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
                             else:
-                                st.session_state["feedback"] = "Wrong station."
+                                st.session_state["feedback"] = "❌ Wrong station."
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
