@@ -1,4 +1,4 @@
-# Core app framework (fragment support)
+# Core app framework (fragment supported)
 streamlit==1.36.0
 
 # Image handling
