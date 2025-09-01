@@ -1,4 +1,4 @@
-# Tube Guessr — polished UI, safe SVG render, fragment polyfill & caching
+# Tube Guessr — polished UI, tight spacing, safe SVG render, fragment polyfill & caching
 
 import base64
 import csv
@@ -67,6 +67,7 @@ GLOBAL_CSS = """
   .play-center .stButton>button { min-width: 220px; }
 
   /* Text input */
+  .stTextInput { margin-top: 2px !important; margin-bottom: 4px !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
     border-radius: 10px;
@@ -79,8 +80,8 @@ GLOBAL_CSS = """
 
   .post-input { margin-top: 6px; font-size: 0.95rem; }
 
-  /* Map wrapper */
-  .map-wrap { margin: 0 auto 8px auto !important; }
+  /* Map wrapper: smaller bottom gap */
+  .map-wrap { margin: 0 auto 4px auto !important; }
 </style>
 """
 
@@ -241,7 +242,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         overlay_svg = ""
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 4px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
         <defs>{GRAY_FILTER_DEF}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -317,12 +318,15 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Use components.html to safely render the SVG (prevents TypeError in client)
+        # Map (tight bottom spacing)
         components.v1.html(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            height=VIEW_H + 40,
+            height=VIEW_H + 20,
             scrolling=False,
         )
+
+        # Tight container for guess input + suggestions right under map
+        st.markdown("<div style='margin-top:6px'>", unsafe_allow_html=True)
 
         if st.session_state.phase == "play":
             q_now = st.text_input(
@@ -353,6 +357,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
                         st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)  # end tight container
 
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
