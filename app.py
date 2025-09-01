@@ -1,5 +1,5 @@
-# Metrodle Dupe — Public (pixel-accurate inline SVG crop)
-# Live suggestions on every keystroke using streamlit-searchbox (falls back to st.text_input).
+# Metrodle Dupe — Public (pixel-accurate inline SVG crop with fragments for smooth typing)
+# Live suggestions re-render ONLY the input area via st.fragment (no full-page flicker while typing).
 # Big translucent markers (r=30): amber = same line, red = different line, hidden for correct.
 # Calibration removed.
 
@@ -14,24 +14,16 @@ from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 
-# Try a keystroke-reactive search box
-HAS_SB = False
-try:
-    from streamlit_searchbox import st_searchbox
-    HAS_SB = True
-except Exception:
-    HAS_SB = False
-
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG shown to users
-DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-populated via your private app
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
+DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620
-ZOOM        = 3.0
-RING_PX     = 28
+VIEW_W, VIEW_H = 980, 620          # viewport (px) for crop
+ZOOM        = 3.0                  # zoom into the answer
+RING_PX     = 28                   # center ring radius (px)
 RING_STROKE = 6
 MAX_GUESSES = 6
 
@@ -39,8 +31,8 @@ MAX_GUESSES = 6
 @dataclass
 class Station:
     name: str
-    fx: float
-    fy: float
+    fx: float   # frac X in full SVG (0..1)
+    fy: float   # frac Y in full SVG (0..1)
     lines: List[str]
     @property
     def key(self) -> str:
@@ -122,7 +114,7 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
-    """Return (data_uri, baseW, baseH) for the blank map SVG; infer size from viewBox/width/height."""
+    """Return (data_uri, baseW, baseH) for the blank map SVG."""
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -142,7 +134,7 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
 
 # -------------------- GEOMETRY / SVG RENDER --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
-    """Translate/scale to center the ANSWER at viewport center."""
+    """Translate+scale so the answer lands at the viewport center."""
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -152,7 +144,7 @@ def project_to_screen(baseW: float, baseH: float,
                       fx_target: float, fy_target: float,
                       fx_center: float, fy_center: float,
                       zoom: float) -> Tuple[float, float]:
-    """Project target (fx,fy) into the viewport centered on (fx_center,fy_center)."""
+    """Project (fx,fy) into the centered viewport."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     x = fx_target * baseW * zoom + tx
     y = fy_target * baseH * zoom + ty
@@ -162,9 +154,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """
-    Inline SVG for the crop. Overlays are tuples: (x_px, y_px, color, radius_px).
-    """
+    """Inline SVG crop with overlays = [(x,y,color,r), ...] in viewport px."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
@@ -279,94 +269,92 @@ if st.session_state.phase=="start":
         if st.button("Start Game", type="primary", use_container_width=True):
             if start_round(): st.rerun()
 
-# -------- Game play / end screens --------
+# -------------------- MAIN PLAY / END --------------------
 if st.session_state.phase in ("play", "end") and STATIONS:
     answer: Station = st.session_state.answer or STATIONS[0]
     colorize=False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
         if last and same_line(last, answer): colorize=True
-
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Translucent overlays for visible (wrong) guesses
+    # Build overlays for wrong guesses visible in the crop (ANSWER is center)
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
-        if not st_obj or st_obj.key == answer.key:
+        if not st_obj or st_obj.key == answer.key:  # hide ring for correct
             continue
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))
+            overlays.append((sx, sy, color, 30.0))  # 3× diameter-ish
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
+        # Map (does NOT re-render while typing; see fragment below)
         st.markdown(
             make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
-        if st.session_state.phase == "play":
-            # ---- Live keystroke suggestions ----
-            picked: Optional[str] = None
+        # --------- FRAGMENT: only this input + suggestions area reruns on keystrokes ---------
+        try:
+            fragment = st.fragment  # Streamlit >= 1.32
+        except AttributeError:
+            def fragment(func=None, *fargs, **fkwargs):
+                def deco(f): return f
+                return deco if func is None else deco(func)
 
-            if HAS_SB:
-                def _search_fn(q: str) -> List[str]:
-                    return prefix_suggestions(q, NAMES, limit=5)
-                picked = st_searchbox(
-                    _search_fn,
-                    key="live_searchbox",
-                    placeholder="Start typing…",
-                    clear_on_submit=True,
-                    default=None,              # do not preset a value
-                )
-            else:
-                # Fallback: plain input (older Streamlit may need Enter)
-                q_now = st.text_input(
-                    "Type to search stations",
-                    key="live_searchbox_fallback",
-                    placeholder="Start typing…",
-                    label_visibility="collapsed"
-                )
-                sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
-                if sugg:
-                    st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
-                    for s in sugg:
-                        if st.button(s, key=f"sugg_{s}", use_container_width=True):
-                            picked = s
-                            break
-                    st.markdown('</div>', unsafe_allow_html=True)
+        @fragment
+        def guess_fragment(names, by_key, answer_obj):
+            # IMPORTANT: never programmatically set/delete this key elsewhere
+            q_now = st.text_input(
+                "Type to search stations",
+                key="live_guess_box",
+                placeholder="Start typing…",
+                label_visibility="collapsed",
+            )
 
-            # If a suggestion was picked, immediately score it
+            sugg = prefix_suggestions(q_now or "", names, limit=5)
+            picked = None
+            if sugg:
+                st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
+                for s in sugg:
+                    if st.button(s, key=f"sugg_{s}", use_container_width=True):
+                        picked = s
+                        break
+                st.markdown("</div>", unsafe_allow_html=True)
+
             if picked:
                 st.session_state.history.append(picked)
                 st.session_state.remaining -= 1
-                chosen = resolve_guess(picked, BY_KEY)
-                if chosen and chosen.key == answer.key:
+                chosen = resolve_guess(picked, by_key)
+                if chosen and chosen.key == answer_obj.key:
                     st.session_state.won = True
                     st.session_state.phase = "end"
                     st.session_state["feedback"] = ""
                 else:
-                    if chosen and same_line(chosen, answer):
-                        lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
+                    if chosen and same_line(chosen, answer_obj):
+                        lines = ", ".join(overlap_lines(chosen, answer_obj)) or "right line"
                         st.session_state["feedback"] = f"❌ Wrong station, but correct line ({lines})."
                     else:
                         st.session_state["feedback"] = "❌ Wrong station."
                     if st.session_state.remaining <= 0:
                         st.session_state.won = False
                         st.session_state.phase = "end"
-                st.rerun()
+                st.rerun()  # one full rerun to refresh map/overlays/history
 
-            if st.session_state.get("feedback"):
-                st.info(st.session_state["feedback"])
+        if st.session_state.phase == "play":
+            guess_fragment(NAMES, BY_KEY, answer)
 
-        post = st.container()
-        with post:
-            if st.session_state.history:
-                st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
-            st.caption(f"Guesses left: {st.session_state.remaining}")
+        # Feedback + history/status
+        if st.session_state.get("feedback"):
+            st.info(st.session_state["feedback"])
+        if st.session_state.history:
+            st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
+        st.caption(f"Guesses left: {st.session_state.remaining}")
 
+    # End screen
     if st.session_state.phase == "end":
         _l, c, _r = st.columns([1,1,1])
         with c:
@@ -374,8 +362,7 @@ if st.session_state.phase in ("play", "end") and STATIONS:
                 st.success("Nice! You got it.")
             else:
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
-            with st.container():
-                st.markdown('<div class="play-again">', unsafe_allow_html=True)
-                if st.button("Play again", type="primary", use_container_width=True):
-                    if start_round(): st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="play-again">', unsafe_allow_html=True)
+            if st.button("Play again", type="primary", use_container_width=True):
+                if start_round(): st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
