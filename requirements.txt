@@ -12,3 +12,5 @@ streamlit-image-coordinates>=0.1.6
 
 # Autocomplete/searchbox widget
 streamlit-searchbox==0.1.4
+
+cairosvg>=2.7
