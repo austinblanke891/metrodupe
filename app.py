@@ -1,4 +1,8 @@
-# Tube Guessr — inline SVG (no iframe), mobile-friendly greyscale, zero-gap input under map
+# Tube Guessr — SAFE MODE
+# - No st.fragment / components / 3rd-party widgets (avoids front-end TypeError)
+# - Inline SVG with filter="url(#gray)" (mobile Safari-friendly greyscale)
+# - Guess bar sits directly under the map (no extra spacing)
+# - Same crop logic: 980x620 view, translate+scale around answer station
 
 import base64
 import csv
@@ -18,64 +22,55 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # fixed internal view for pixel-accurate crop
+VIEW_W, VIEW_H = 980, 620        # internal viewBox used for crop
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
-# -------------------- GLOBAL CSS --------------------
+# -------------------- PAGE + GLOBAL CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
     <style>
       .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
-      @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
-      .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
+      .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
 
-      /* Remove default vertical gaps so the input hugs the map */
-      section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+      /* Tighten layout: remove default element gaps so input hugs the map */
       section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
-      section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+      section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
 
-      /* Radios */
-      div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
-
-      /* Buttons */
-      .stButton>button {
-        min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
-        background: #2563eb; color: #fff; border: none;
-      }
-      .stButton>button:hover { background: #1d4ed8; }
-      .play-center { display:flex; justify-content:center; }
-      .play-center .stButton>button { min-width: 220px; }
-
-      /* Map + input containers */
-      .map-wrap { width:min(100%, 980px); margin:0 auto 0 auto !important; }
+      /* Map + input wrappers */
+      .map-wrap   { width:min(100%, 980px); margin:0 auto 0 auto !important; }
       .map-wrap svg { display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }
-      .guess-wrap { width:min(100%, 980px); margin:0 auto; padding: 0 !important; }
+      .guess-wrap { width:min(100%, 980px); margin:0 auto; }
 
+      /* Input */
       .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
       }
 
-      /* Suggestions with a touch more separation */
+      /* Suggestions (slightly separated) */
       .sugg-list { margin-top: 8px; }
-      .sugg-list div.element-container { margin-bottom: 12px !important; }
+      .sugg-list div.element-container { margin-bottom: 10px !important; }
       .sugg-list .stButton>button {
-        width: 100%;
-        border-radius: 14px;
+        width: 100%; border-radius: 14px; padding: 12px 16px;
         box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
-        padding: 12px 16px;
       }
 
       .post-input { margin-top: 8px; font-size: .95rem; }
 
-      /* Result cards */
       .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
       .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
       .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
+
+      .play-center { display:flex; justify-content:center; }
+      .play-center .stButton>button {
+        min-width: 220px; min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
+        background: #2563eb; color: #fff; border: none;
+      }
+      .play-center .stButton>button:hover { background: #1d4ed8; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -139,9 +134,9 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- ASSETS (b64 data-uri for <image>) --------------------
+# -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
-def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
+def load_svg_datauri(svg_path: Path) -> Tuple[str, float, float]:
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
@@ -175,16 +170,14 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (inline SVG) --------------------
+# -------------------- MAP (inline SVG; no components) --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """Inline SVG (no iframe). Greyscale via attribute filter=… for iOS. Input sits directly below."""
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
-    # SVG greyscale filter; applied via attribute to work on mobile Safari.
     gray_filter = """
       <filter id="gray">
         <feColorMatrix type="matrix"
@@ -297,7 +290,7 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
+SVG_URI, SVG_W, SVG_H = load_svg_datauri(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
@@ -330,7 +323,7 @@ elif st.session_state.phase in ("play","end"):
 
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
 
-    # Colorization hint (amber ring + colored map if last guess shares a line)
+    # Colorization hint: turn map colored if last guess shares a line
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
@@ -348,9 +341,9 @@ elif st.session_state.phase in ("play","end"):
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Map (centered) + input directly underneath
-    html = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays)
-    st.markdown(html, unsafe_allow_html=True)
+    # Map + input (tight stack, no gap)
+    st.markdown(make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+                unsafe_allow_html=True)
 
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
@@ -396,7 +389,10 @@ elif st.session_state.phase in ("play","end"):
             st.markdown('<div class="card success">Correct!</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="card error">Out of guesses. The station was <b>{answer.name}</b>.</div>', unsafe_allow_html=True)
-        if centered_play("Play again", key="play_again_btn", top_margin_px=16):
+        st.markdown('<div class="play-center">', unsafe_allow_html=True)
+        again = st.button("Play again", key="play_again_btn")
+        st.markdown("</div>", unsafe_allow_html=True)
+        if again:
             if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
 else:
