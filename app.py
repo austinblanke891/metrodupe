@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from html import escape as html_escape
 
 import streamlit as st
 
@@ -156,11 +157,12 @@ def project_to_screen(baseW: float, baseH: float,
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+                  overlays: Optional[List[Tuple[float, float, str, float, str, bool]]] = None) -> str:
     """
     We embed the SVG (vector, sharp) and draw the visible crop using a <svg> viewbox
     plus a transform. The guess ring sits *on top* and the guess markers are drawn as
-    semi-transparent circles.
+    semi-transparent circles with labels.
+    overlays: list of (sx, sy, color, radius, label, on_same_line)
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -180,12 +182,47 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     overlay_svg = ""
     if overlays:
         parts = []
-        for (sx, sy, color, rr) in overlays:
+        for (sx, sy, color, rr, label, on_line) in overlays:
+            label = html_escape(label or "")
+            # Keep label inside viewport a bit
+            label_x = max(60, min(VIEW_W - 60, sx))
+            label_y = max(22, sy - (rr + 16))
+
+            # A stronger visual for same-line (amber) guesses:
+            # - fat outer translucent halo
+            # - solid ring
+            # - small inner dot
+            halo_opacity = "0.28" if on_line else "0.20"
+            ring_w = "6" if on_line else "5"
+            dot_r  = "4.5" if on_line else "4.0"
+            dash   = "6,5" if on_line else "none"   # amber gets a dash to pop
+
             parts.append(
                 f"""<g class="guess-marker">
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr*1.25:.1f}"
+                              fill="none"
+                              stroke="{color}" stroke-opacity="{halo_opacity}"
+                              stroke-width="12"
+                              style="filter: drop-shadow(0 0 8px {color});"/>
                       <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                              fill="{color}" fill-opacity="0.28"
-                              stroke="{color}" stroke-width="2" />
+                              fill="none"
+                              stroke="{color}" stroke-width="{ring_w}"
+                              {"stroke-dasharray='"+dash+"'" if dash!="none" else ""}
+                              style="filter: drop-shadow(0 0 6px {color});"/>
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{dot_r}"
+                              fill="{color}" fill-opacity="0.9"
+                              stroke="{color}" stroke-width="1" />
+                      <!-- Label with outline for contrast -->
+                      <text x="{label_x:.1f}" y="{label_y:.1f}"
+                            text-anchor="middle"
+                            font-size="15" font-weight="700"
+                            stroke="#ffffff" stroke-width="3"
+                            paint-order="stroke"
+                            fill="#111111">{label}</text>
+                      <text x="{label_x:.1f}" y="{label_y:.1f}"
+                            text-anchor="middle"
+                            font-size="15" font-weight="700"
+                            fill="#111111">{label}</text>
                     </g>"""
             )
         overlay_svg = "\n".join(parts)
@@ -244,7 +281,6 @@ st.markdown(
       .play-center .stButton>button {
         min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
       }
-      /* remove extra gap between map and input on mobile as well */
       @media (max-width: 640px) {
         .block-container { padding-top: .8rem; }
       }
@@ -326,15 +362,17 @@ elif st.session_state.phase in ("play","end"):
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    overlays: List[Tuple[float,float,str,float]] = []
+    overlays: List[Tuple[float,float,str,float,str,bool]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj or st_obj.key == answer.key:
             continue
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
-            overlays.append((sx, sy, color, 30.0))
+            on_line = same_line(st_obj, answer)
+            color   = "#f59e0b" if on_line else "#ef4444"
+            radius  = 36.0 if on_line else 28.0
+            overlays.append((sx, sy, color, radius, st_obj.name, on_line))
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
