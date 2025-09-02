@@ -1,16 +1,17 @@
-# Tube Guessr — robust single-SVG map (PNG inside <svg>), mobile-safe grayscale, tight spacing
+# Tube Guessr — stable PIL renderer (no HTML), mobile-safe crop + grayscale
 
 import base64
 import csv
 import datetime as dt
+import io
 import random
 import re
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+from PIL import Image, ImageDraw, ImageOps
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -24,7 +25,7 @@ ZOOM        = 3.0
 RING_PX     = 28             # constant viewport px
 RING_STROKE = 6
 MAX_GUESSES = 6
-MAX_RASTER_SIDE = 2048       # keep PNG data-URI / GPU-friendly
+MAX_RASTER_SIDE = 2400       # render once to this max side for speed/quality
 
 # -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
@@ -127,7 +128,7 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SVG → PNG data URI --------------------
+# -------------------- SVG → PIL Image --------------------
 def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
@@ -139,23 +140,25 @@ def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
 @st.cache_resource(show_spinner=False)
-def load_map_png_datauri(svg_path: Path, max_side: int) -> Tuple[str, float, float, float]:
+def load_map_pil(svg_path: Path, max_side: int) -> Tuple[Image.Image, float, float, float]:
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
     base_w, base_h = _parse_svg_dims(txt)
 
     scale = min(1.0, max_side / max(base_w, base_h))
-    out_w = int(base_w * scale)
-    out_h = int(base_h * scale)
+    out_w = max(1, int(base_w * scale))
+    out_h = max(1, int(base_h * scale))
 
     try:
         import cairosvg
         png_bytes = cairosvg.svg2png(bytestring=raw, output_width=out_w, output_height=out_h)
-        b64 = base64.b64encode(png_bytes).decode("ascii")
-        return f"data:image/png;base64,{b64}", base_w, base_h, scale
+        pil = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        return pil, base_w, base_h, scale
     except Exception:
-        b64 = base64.b64encode(raw).decode("ascii")
-        return f"data:image/svg+xml;base64,{b64}", base_w, base_h, 1.0
+        # Fallback: let the client render the SVG (rarely used on Streamlit Cloud)
+        # Create a 1x1 transparent placeholder to avoid crashes.
+        pil = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+        return pil, base_w, base_h, scale
 
 # -------------------- GEOMETRY --------------------
 def css_tx_ty(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -173,56 +176,51 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- RENDERER --------------------
-def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
-                   fx_center: float, fy_center: float,
-                   zoom: float, colorize: bool, ring_color: str,
-                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+# -------------------- RENDER (PIL) --------------------
+def render_frame(pil_base: Image.Image, baseW: float, baseH: float, scale_png: float,
+                 fx_center: float, fy_center: float,
+                 zoom: float, colorize: bool,
+                 overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> Image.Image:
 
-    eff_zoom = zoom * png_scale
+    eff_zoom = zoom * scale_png
     tx, ty = css_tx_ty(baseW, baseH, fx_center, fy_center, eff_zoom)
 
-    effW = baseW * png_scale
-    effH = baseH * png_scale
+    # Resize base to eff_zoom
+    resized = pil_base
+    if abs(eff_zoom - 1.0) > 1e-6:
+        new_w = max(1, int(round(pil_base.width * eff_zoom)))
+        new_h = max(1, int(round(pil_base.height * eff_zoom)))
+        resized = pil_base.resize((new_w, new_h), Image.BICUBIC)
 
-    gray_filter = """
-      <filter id="gray">
-        <feColorMatrix type="matrix"
-          values="0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0      0      0      1 0"/>
-      </filter>
-    """
-    group_style = 'filter:url(#gray);' if not colorize else ''
+    # Paste into viewport canvas
+    canvas = Image.new("RGBA", (VIEW_W, VIEW_H), (15, 17, 21, 255))  # dark background
+    # fractional offsets → round (Pillow crops outside automatically)
+    canvas.paste(resized, (int(round(tx)), int(round(ty))), resized)
 
-    overlay_svg = ""
+    # Grayscale if needed (but keep alpha)
+    if not colorize:
+        rgb, alpha = canvas.convert("RGB"), canvas.split()[-1]
+        gray = ImageOps.grayscale(rgb).convert("RGB")
+        canvas = Image.merge("RGBA", (*gray.split(), alpha))
+
+    # Draw overlays
+    draw = ImageDraw.Draw(canvas)
     if overlays:
-        parts = []
-        for (sx, sy, color, rr) in overlays:
-            parts.append(
-                f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2" />'
-            )
-        overlay_svg = "\n".join(parts)
+        for (sx, sy, color_hex, rr) in overlays:
+            r = rr
+            bbox = [sx - r, sy - r, sx + r, sy + r]
+            try:
+                color = color_hex
+                draw.ellipse(bbox, outline=color, width=2, fill=(0,0,0,0))
+            except Exception:
+                pass
 
+    # Draw ring last (always visible)
     ring_r = float(RING_PX)
+    cx, cy = VIEW_W/2, VIEW_H/2
+    draw.ellipse([cx-ring_r, cy-ring_r, cx+ring_r, cy+ring_r], outline="#22c55e", width=RING_STROKE)
 
-    return f"""
-<div class="map-wrap">
-  <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115">
-    <defs>{gray_filter}</defs>
-    <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="{group_style}">
-      <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
-    </g>
-
-    <!-- ring lives OUTSIDE filter, always visible and centered -->
-    <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{ring_r:.1f}" stroke="{ring_color}"
-            stroke-width="{RING_STROKE}" fill="none" />
-
-    {overlay_svg}
-  </svg>
-</div>
-""".strip()
+    return canvas
 
 # -------------------- SUGGEST/RESOLVE --------------------
 def alias_name(q: str) -> str:
@@ -296,7 +294,7 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-IMG_URI, BASE_W, BASE_H, PNG_SCALE = load_map_png_datauri(SVG_PATH, MAX_RASTER_SIDE)
+PIL_BASE, BASE_W, BASE_H, PNG_SCALE = load_map_pil(SVG_PATH, MAX_RASTER_SIDE)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
@@ -333,23 +331,23 @@ elif st.session_state.phase in ("play","end"):
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
         if last and same_line(last, answer): colorize = True
-    ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj or st_obj.key == answer.key: continue
-        sx, sy = project_to_screen(BASE_W, BASE_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
+        sx, sy = project_to_screen(BASE_W, BASE_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM*PNG_SCALE)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Map (tight) + input directly under
-    st.markdown(
-        render_map_svg(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
-        unsafe_allow_html=True
-    )
+    # Render frame → st.image (no HTML)
+    frame = render_frame(PIL_BASE, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, overlays)
+    st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
+    st.image(frame, use_column_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    # Input directly under the map
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
         q_now = st.text_input(
