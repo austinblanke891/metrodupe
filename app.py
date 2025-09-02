@@ -1,5 +1,6 @@
-# Tube Guessr — DOM <img> base (mobile-safe grayscale), SVG overlay for ring/markers,
-# zero map->input gap, wider suggestion spacing, custom result cards
+# Tube Guessr — stable map via components.html (iframe sandbox),
+# IMG base (mobile-safe grayscale) + SVG overlay, zero map->input gap,
+# spaced suggestion buttons, custom result cards
 
 import base64
 import csv
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+from streamlit.components.v1 import html as st_html
 
 # ---------- fragment polyfill ----------
 try:
@@ -226,12 +228,12 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     return x, y
 
 # -------------------- MAP RENDER (IMG + SVG overlay) --------------------
-def make_map_html(svg_uri: str, baseW: float, baseH: float,
-                  tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
+                    tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
+                    overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Render base map as <img> (CSS grayscale -> mobile-safe) and ring/markers as a
-    separate SVG overlay. No <defs>, no iframe, no DOM errors.
+    Build a tiny HTML document for st.components.v1.html (iframe).
+    Using <img> for base map (CSS grayscale → mobile-safe); SVG overlay for ring/markers.
     """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
@@ -244,29 +246,38 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
             for (sx, sy, color, rr) in overlays
         )
 
-    # Container -> IMG (translated/scaled), then overlay SVG at full viewport size
-    return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
-      <div style="
-        position:relative; width:{VIEW_W}px; height:{VIEW_H}px;
-        margin:0 auto; border-radius:14px; overflow:hidden; background:#0f1115;">
-        <img src="{svg_uri}" alt="map"
-             style="
-               position:absolute; left:0; top:0;
-               width:{baseW}px; height:{baseH}px;
-               transform: translate({tx}px, {ty}px) scale({zoom});
-               transform-origin: 0 0;
-               {css_gray}
-             " />
-        <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" height="100%"
-             style="position:absolute; left:0; top:0;">
-          <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-                  stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none" />
-          {overlay_svg}
-        </svg>
-      </div>
-    </div>
-    """
+    # full mini-doc; no external CSS/JS; fixed height = VIEW_H to avoid extra spacing
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body {{ margin:0; padding:0; background:transparent; }}
+  .wrap {{
+    position:relative; width:{VIEW_W}px; height:{VIEW_H}px;
+    margin:0 auto; border-radius:14px; overflow:hidden; background:#0f1115;
+  }}
+  img.map {{
+    position:absolute; left:0; top:0; width:{baseW}px; height:{baseH}px;
+    transform: translate({tx}px, {ty}px) scale({zoom});
+    transform-origin: 0 0; {css_gray}
+    display:block; pointer-events:none;
+  }}
+  svg.overlay {{
+    position:absolute; left:0; top:0; width:100%; height:100%;
+    display:block; pointer-events:none;
+  }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <img class="map" src="{svg_uri}" alt="map">
+    <svg class="overlay" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
+      <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+              stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
+      {overlay_svg}
+    </svg>
+  </div>
+</body></html>"""
 
 # -------------------- CARDS --------------------
 def success_card(text: str) -> str:
@@ -335,11 +346,10 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map (IMG base + SVG overlay)
-        st.markdown(
-            make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
-            unsafe_allow_html=True
-        )
+        # Map via sandboxed component (prevents Streamlit DOM crashes)
+        srcdoc = make_map_srcdoc(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
+        # Height equals the visible viewport so the guess box sits flush underneath
+        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
