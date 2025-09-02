@@ -1,4 +1,4 @@
-# Tube Guessr — stable PIL renderer (no HTML), mobile-safe crop + grayscale
+# Tube Guessr — PIL renderer (no st.html), mobile-safe crop + grayscale + clear rasterizer warning
 
 import base64
 import csv
@@ -20,12 +20,12 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620   # viewport (px)
+VIEW_W, VIEW_H = 980, 620
 ZOOM        = 3.0
-RING_PX     = 28             # constant viewport px
+RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
-MAX_RASTER_SIDE = 2400       # render once to this max side for speed/quality
+MAX_RASTER_SIDE = 2400
 
 # -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
@@ -35,7 +35,7 @@ st.markdown(
   .block-container { max-width: 1100px; padding-top: 0.9rem; padding-bottom: .4rem; }
   .block-container h1:first-of-type { margin: 0 0 .4rem 0; }
 
-  /* squash default gaps so the input hugs the map */
+  /* kill default gaps so the input hugs the map */
   section.main div.element-container { margin: 0 !important; padding: 0 !important; }
   section.main [data-testid="stVerticalBlock"] { row-gap: 0 !important; }
   .stMarkdown p { margin: 0 !important; }
@@ -140,7 +140,7 @@ def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
 @st.cache_resource(show_spinner=False)
-def load_map_pil(svg_path: Path, max_side: int) -> Tuple[Image.Image, float, float, float]:
+def load_map_pil(svg_path: Path, max_side: int) -> Tuple[Image.Image, float, float, float, bool]:
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
     base_w, base_h = _parse_svg_dims(txt)
@@ -150,15 +150,15 @@ def load_map_pil(svg_path: Path, max_side: int) -> Tuple[Image.Image, float, flo
     out_h = max(1, int(base_h * scale))
 
     try:
-        import cairosvg
-        png_bytes = cairosvg.svg2png(bytestring=raw, output_width=out_w, output_height=out_h)
+        import cairosvg  # noqa: F401
+        import cairosvg as _csvg
+        png_bytes = _csvg.svg2png(bytestring=raw, output_width=out_w, output_height=out_h)
         pil = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-        return pil, base_w, base_h, scale
+        return pil, base_w, base_h, scale, True
     except Exception:
-        # Fallback: let the client render the SVG (rarely used on Streamlit Cloud)
-        # Create a 1x1 transparent placeholder to avoid crashes.
-        pil = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-        return pil, base_w, base_h, scale
+        # No rasterizer available
+        pil = Image.new("RGBA", (max(1, out_w), max(1, out_h)), (0, 0, 0, 0))
+        return pil, base_w, base_h, scale, False
 
 # -------------------- GEOMETRY --------------------
 def css_tx_ty(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -185,37 +185,30 @@ def render_frame(pil_base: Image.Image, baseW: float, baseH: float, scale_png: f
     eff_zoom = zoom * scale_png
     tx, ty = css_tx_ty(baseW, baseH, fx_center, fy_center, eff_zoom)
 
-    # Resize base to eff_zoom
     resized = pil_base
     if abs(eff_zoom - 1.0) > 1e-6:
         new_w = max(1, int(round(pil_base.width * eff_zoom)))
         new_h = max(1, int(round(pil_base.height * eff_zoom)))
         resized = pil_base.resize((new_w, new_h), Image.BICUBIC)
 
-    # Paste into viewport canvas
-    canvas = Image.new("RGBA", (VIEW_W, VIEW_H), (15, 17, 21, 255))  # dark background
-    # fractional offsets → round (Pillow crops outside automatically)
+    canvas = Image.new("RGBA", (VIEW_W, VIEW_H), (15, 17, 21, 255))
     canvas.paste(resized, (int(round(tx)), int(round(ty))), resized)
 
-    # Grayscale if needed (but keep alpha)
     if not colorize:
         rgb, alpha = canvas.convert("RGB"), canvas.split()[-1]
         gray = ImageOps.grayscale(rgb).convert("RGB")
         canvas = Image.merge("RGBA", (*gray.split(), alpha))
 
-    # Draw overlays
     draw = ImageDraw.Draw(canvas)
     if overlays:
         for (sx, sy, color_hex, rr) in overlays:
             r = rr
             bbox = [sx - r, sy - r, sx + r, sy + r]
             try:
-                color = color_hex
-                draw.ellipse(bbox, outline=color, width=2, fill=(0,0,0,0))
+                draw.ellipse(bbox, outline=color_hex, width=2, fill=(0,0,0,0))
             except Exception:
                 pass
 
-    # Draw ring last (always visible)
     ring_r = float(RING_PX)
     cx, cy = VIEW_W/2, VIEW_H/2
     draw.ellipse([cx-ring_r, cy-ring_r, cx+ring_r, cy+ring_r], outline="#22c55e", width=RING_STROKE)
@@ -294,12 +287,16 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-PIL_BASE, BASE_W, BASE_H, PNG_SCALE = load_map_pil(SVG_PATH, MAX_RASTER_SIDE)
+PIL_BASE, BASE_W, BASE_H, PNG_SCALE, SVG_OK = load_map_pil(SVG_PATH, MAX_RASTER_SIDE)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
-if st.session_state.phase == "welcome":
+def ui_header():
     st.markdown("# Tube Guessr")
+    render_mode_picker(title_on_top=True)
+
+if st.session_state.phase == "welcome":
+    ui_header()
     st.markdown(
         """
 Guess the London Underground station from a zoomed-in crop of the Tube map.
@@ -316,17 +313,21 @@ Guess the London Underground station from a zoomed-in crop of the Tube map.
         st.session_state.phase="start"; st.rerun()
 
 elif st.session_state.phase == "start":
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
+    ui_header()
     if centered_play("Start Game", key="start_btn", top_margin_px=6):
         if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
 elif st.session_state.phase in ("play","end"):
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
+    ui_header()
+
+    # Warn early if rasterizer missing
+    if not SVG_OK:
+        st.error(
+            "SVG renderer not available — install `cairosvg` (and `cairocffi`, `tinycss2`, `cssselect2`) "
+            "in requirements.txt. The map won’t draw until it’s installed."
+        )
 
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
-
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
@@ -341,13 +342,11 @@ elif st.session_state.phase in ("play","end"):
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Render frame → st.image (no HTML)
     frame = render_frame(PIL_BASE, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, overlays)
     st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
     st.image(frame, use_column_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Input directly under the map
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
         q_now = st.text_input(
