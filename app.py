@@ -1,6 +1,5 @@
-# Tube Guessr — classic centered crop + mobile-friendly responsive scaling
-# Map drawn inside a sandboxed <svg> (image + feColorMatrix), crop identical to original.
-# The SVG scales to container width; iframe height auto-updates so the guess bar stays flush.
+# Tube Guessr — inline SVG (no iframe), classic centered crop, mobile-friendly, greyscale works on iOS
+# The map is an inline <svg> using <image> + feColorMatrix. Crop math unchanged; input sits flush underneath.
 
 import base64
 import csv
@@ -12,7 +11,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-from streamlit.components.v1 import html as st_html
 
 # ---------- fragment polyfill ----------
 try:
@@ -50,6 +48,7 @@ st.markdown(
       @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
       .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
+      /* Remove default vertical gaps */
       section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
       section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
       section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
@@ -67,8 +66,9 @@ st.markdown(
       .play-center .stButton>button { min-width: 220px; }
 
       /* Map + input: zero gap */
-      .map-wrap { margin: 0 auto 0 auto !important; }
-      .guess-wrap { margin: 0 !important; padding: 0 !important; }
+      .map-wrap { width:min(100%, 980px); margin:0 auto 0 auto !important; }
+      .map-wrap svg { display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }
+      .guess-wrap { width:min(100%, 980px); margin:0 auto; padding: 0 !important; }
 
       .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
       .stTextInput>div>div>input {
@@ -186,15 +186,11 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (responsive SVG; iframe autoresize) --------------------
-def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
-                               tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
-                               overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """
-    Same centered crop in a 980x620 viewBox, but the <svg> scales to 100% width.
-    Script posts 'componentReady' and 'setFrameHeight' so the iframe hugs the map,
-    putting the guess bar directly underneath with no gap.
-    """
+# -------------------- MAP (inline SVG) --------------------
+def make_map_html_inline(svg_data_uri: str, baseW: float, baseH: float,
+                         tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
+                         overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    """Returns inline HTML for the map. Responsive width; aspect from viewBox; no iframe; no gaps."""
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     filter_attr = '' if colorize else 'filter="url(#gray)"'
 
@@ -206,67 +202,33 @@ def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
             for (sx, sy, color, rr) in overlays
         )
 
-    ratio = VIEW_H / VIEW_W
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  html,body {{ margin:0; padding:0; background:transparent; }}
-  .wrap {{ width:100%; max-width:{VIEW_W}px; margin:0 auto; }}
-  svg#mapsvg {{ display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }}
-</style>
-</head>
-<body>
-  <div class="wrap">
-    <svg id="mapsvg" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <filter id="gray">
-          <feColorMatrix type="matrix"
-            values="0.2126 0.7152 0.0722 0 0
-                    0.2126 0.7152 0.0722 0 0
-                    0.2126 0.7152 0.0722 0 0
-                    0      0      0      1 0"/>
-        </filter>
-      </defs>
+    return f"""
+    <div class="map-wrap">
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <filter id="gray">
+            <feColorMatrix type="matrix"
+              values="0.2126 0.7152 0.0722 0 0
+                      0.2126 0.7152 0.0722 0 0
+                      0.2126 0.7152 0.0722 0 0
+                      0      0      0      1 0"/>
+          </filter>
+        </defs>
 
-      <!-- Map image positioned by translate+scale, then grey-filtered -->
-      <g transform="translate({tx},{ty}) scale({zoom})">
-        <image href="{svg_data_uri}" width="{baseW}" height="{baseH}" {filter_attr}/>
-      </g>
+        <!-- Map image positioned by translate+scale, then grey-filtered -->
+        <g transform="translate({tx},{ty}) scale({zoom})">
+          <image href="{svg_data_uri}" width="{baseW}" height="{baseH}" {filter_attr}/>
+        </g>
 
-      <!-- Center ring -->
-      <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-              stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
+        <!-- Center ring -->
+        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+                stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
 
-      <!-- Wrong-guess markers -->
-      {overlay_svg}
-    </svg>
-  </div>
-
-  <script>
-    (function(){{
-      const RATIO = {ratio};
-      function calcHeight() {{
-        const svg = document.getElementById('mapsvg');
-        const w = svg.getBoundingClientRect().width;
-        return Math.max(1, Math.ceil(w * RATIO));
-      }}
-      function sendHeight(h) {{
-        window.parent.postMessage({{ type:'streamlit:componentReady', height:h }}, '*');
-        window.parent.postMessage({{ type:'streamlit:setFrameHeight', height:h }}, '*');
-      }}
-      function resize() {{
-        const h = calcHeight();
-        const svg = document.getElementById('mapsvg');
-        svg.style.height = h + 'px';
-        sendHeight(h);
-      }}
-      window.addEventListener('load', resize);
-      window.addEventListener('resize', resize);
-      setTimeout(resize, 60); setTimeout(resize, 180); setTimeout(resize, 360);
-    }})();
-  </script>
-</body></html>"""
+        <!-- Wrong-guess markers -->
+        {overlay_svg}
+      </svg>
+    </div>
+    """
 
 # -------------------- CARDS --------------------
 def success_card(text: str) -> str:
@@ -360,10 +322,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Responsive, centered map in sandbox (crop math unchanged)
-        srcdoc = make_map_srcdoc_responsive(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        # Give a tiny initial height; JS immediately resizes -> no gap under the map
-        st_html(srcdoc, height=10, width=None, scrolling=False)
+        # Inline SVG map (responsive). No iframe → no spacing issues.
+        html = make_map_html_inline(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
+        st.markdown(html, unsafe_allow_html=True)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
