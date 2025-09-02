@@ -1,4 +1,4 @@
-# Tube Guessr — inline <svg> map with separate overlay, mobile-safe, tight spacing
+# Tube Guessr — robust single-SVG map (PNG inside <svg>), mobile-safe grayscale, tight spacing
 
 import base64
 import csv
@@ -19,47 +19,29 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620   # map viewport (px)
+VIEW_W, VIEW_H = 980, 620   # viewport (px)
 ZOOM        = 3.0
-RING_PX     = 28             # viewport px (overlay), constant so it always shows
+RING_PX     = 28             # constant viewport px
 RING_STROKE = 6
 MAX_GUESSES = 6
-MAX_RASTER_SIDE = 2048       # phone/GPU-safe
+MAX_RASTER_SIDE = 2048       # keep PNG data-URI / GPU-friendly
 
 # -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
 <style>
-  /* Compact page */
-  .block-container { max-width: 1100px; padding-top: 1.0rem; padding-bottom: .4rem; }
+  .block-container { max-width: 1100px; padding-top: 0.9rem; padding-bottom: .4rem; }
   .block-container h1:first-of-type { margin: 0 0 .4rem 0; }
 
-  /* Kill default element vertical gaps so map/input hug each other */
+  /* squash default gaps so the input hugs the map */
   section.main div.element-container { margin: 0 !important; padding: 0 !important; }
   section.main [data-testid="stVerticalBlock"] { row-gap: 0 !important; }
   .stMarkdown p { margin: 0 !important; }
 
-  .map-wrap { width:min(100%, 980px); margin:0 auto; }
-  .map-card {
-    width: 100%;
-    aspect-ratio: 980 / 620;
-    position: relative;
-    border-radius: 14px;
-    overflow: hidden;
-    background:#0f1115;
-  }
+  .map-wrap { width:min(100%, 980px); margin:0 auto 6px auto; }
+  .guess-wrap { width:min(100%, 980px); margin:0 auto; }
 
-  /* base map svg fills card */
-  .map-svg, .overlay-svg {
-    position: absolute; inset: 0;
-    width: 100%; height: 100%;
-    display: block;
-  }
-  /* overlay always on top */
-  .overlay-svg { pointer-events: none; }
-
-  .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
@@ -176,7 +158,7 @@ def load_map_png_datauri(svg_path: Path, max_side: int) -> Tuple[str, float, flo
         return f"data:image/svg+xml;base64,{b64}", base_w, base_h, 1.0
 
 # -------------------- GEOMETRY --------------------
-def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
+def css_tx_ty(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -186,44 +168,60 @@ def project_to_screen(baseW: float, baseH: float,
                       fx_target: float, fy_target: float,
                       fx_center: float, fy_center: float,
                       zoom: float) -> Tuple[float, float]:
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    tx, ty = css_tx_ty(baseW, baseH, fx_center, fy_center, zoom)
     x = fx_target * baseW * zoom + tx
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- RENDERERS --------------------
-def render_map_only(img_uri: str, baseW: float, baseH: float, png_scale: float,
-                    fx_center: float, fy_center: float, zoom: float,
-                    colorize: bool) -> str:
+# -------------------- RENDERER --------------------
+def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
+                   fx_center: float, fy_center: float,
+                   zoom: float, colorize: bool, ring_color: str,
+                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+
     eff_zoom = zoom * png_scale
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, eff_zoom)
+    tx, ty = css_tx_ty(baseW, baseH, fx_center, fy_center, eff_zoom)
+
     effW = baseW * png_scale
     effH = baseH * png_scale
-    gray = "none" if colorize else "grayscale(1)"
 
-    return f"""
-<svg class="map-svg" viewBox="0 0 {VIEW_W} {VIEW_H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
-  <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="filter:{gray}">
-    <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
-  </g>
-</svg>
-""".strip()
+    gray_filter = """
+      <filter id="gray">
+        <feColorMatrix type="matrix"
+          values="0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0      0      0      1 0"/>
+      </filter>
+    """
+    group_style = 'filter:url(#gray);' if not colorize else ''
 
-def render_overlay(ring_color: str,
-                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    # Ring is in viewport coords, always at center
-    ring = f'<circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{float(RING_PX):.1f}" fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"/>'
-    other = ""
+    overlay_svg = ""
     if overlays:
         parts = []
-        for sx, sy, color, rr in overlays:
-            parts.append(f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2"/>')
-        other = "\n".join(parts)
+        for (sx, sy, color, rr) in overlays:
+            parts.append(
+                f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2" />'
+            )
+        overlay_svg = "\n".join(parts)
+
+    ring_r = float(RING_PX)
+
     return f"""
-<svg class="overlay-svg" viewBox="0 0 {VIEW_W} {VIEW_H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
-  {ring}
-  {other}
-</svg>
+<div class="map-wrap">
+  <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115">
+    <defs>{gray_filter}</defs>
+    <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="{group_style}">
+      <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
+    </g>
+
+    <!-- ring lives OUTSIDE filter, always visible and centered -->
+    <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{ring_r:.1f}" stroke="{ring_color}"
+            stroke-width="{RING_STROKE}" fill="none" />
+
+    {overlay_svg}
+  </svg>
+</div>
 """.strip()
 
 # -------------------- SUGGEST/RESOLVE --------------------
@@ -346,11 +344,11 @@ elif st.session_state.phase in ("play","end"):
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Map + overlay stacked, then input immediately below (no extra spacing)
-    st.markdown('<div class="map-wrap"><div class="map-card">', unsafe_allow_html=True)
-    st.markdown(render_map_only(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize), unsafe_allow_html=True)
-    st.markdown(render_overlay(ring, overlays), unsafe_allow_html=True)
-    st.markdown('</div></div>', unsafe_allow_html=True)
+    # Map (tight) + input directly under
+    st.markdown(
+        render_map_svg(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+        unsafe_allow_html=True
+    )
 
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
