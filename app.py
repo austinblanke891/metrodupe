@@ -186,10 +186,6 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
-    """
-    Returns (svg_uri, base_w, base_h, is_static).
-    Prefers static URL (/static/...) if present; else falls back to data URI.
-    """
     static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
     if static_fs.exists():
         raw = static_fs.read_bytes()
@@ -231,10 +227,6 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
 def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
                     tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                     overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """
-    Build a tiny HTML document for st.components.v1.html (iframe).
-    Using <img> for base map (CSS grayscale → mobile-safe); SVG overlay for ring/markers.
-    """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
 
@@ -246,7 +238,6 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
             for (sx, sy, color, rr) in overlays
         )
 
-    # full mini-doc; no external CSS/JS; fixed height = VIEW_H to avoid extra spacing
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -330,10 +321,8 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
             colorize = True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Precompute transform once
     tx, ty = css_transform(svg_w, svg_h, answer.fx, answer.fy, ZOOM)
 
-    # Overlays
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, by_key)
@@ -346,10 +335,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map via sandboxed component (prevents Streamlit DOM crashes)
+        # === FIX: pin iframe width to VIEW_W so it matches the internal canvas ===
         srcdoc = make_map_srcdoc(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        # Height equals the visible viewport so the guess box sits flush underneath
-        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
+        st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
@@ -405,7 +393,6 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-# Session state init
 if "phase" not in st.session_state:
     st.session_state.phase="welcome"
     st.session_state.mode="daily"
@@ -416,14 +403,12 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-# Load assets & data
 def _load_svg(svg_path: Path) -> Tuple[str, float, float, bool]:
     return load_svg_data(svg_path)
 
 SVG_URI, SVG_W, SVG_H, _is_static = _load_svg(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# -------------------- ROUTING --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
