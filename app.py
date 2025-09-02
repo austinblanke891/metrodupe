@@ -376,9 +376,9 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-    html_content = make_map_html(
-        SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels
-    )
+        html_content = make_map_html(
+            SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels
+        )
 
         components.html(f"""
         <!doctype html>
