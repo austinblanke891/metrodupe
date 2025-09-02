@@ -1,9 +1,12 @@
-# Tube Guessr — smoother reruns via fragment (with compatibility shim)
+# Tube Guessr — Public (welcome -> start flow; choose mode once on Start)
+# Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
+
 import base64
 import csv
 import datetime as dt
 import random
 import re
+import html
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -146,11 +149,10 @@ def project_to_screen(baseW: float, baseH: float,
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple]] = None) -> str:
+                  overlays: Optional[List[Tuple[float, float, str, float, Optional[str]]]] = None) -> str:
     """
-    overlays: list of tuples
-      (sx, sy, color, radius, label, on_line)
-      label/on_line are optional; older 4-tuple still supported.
+    overlays: list of (sx, sy, color, radius_px, label_text)
+              screen-space centers, already projected
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -169,55 +171,38 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     overlay_svg = ""
     if overlays:
         parts = []
-        for tup in overlays:
-            sx, sy, color, rr = tup[0], tup[1], tup[2], tup[3]
-            label = tup[4] if len(tup) >= 5 else ""
-            on_line = tup[5] if len(tup) >= 6 else False
-
-            inner_opacity = "0.28" if on_line else "0.20"
-            stroke_w = "3.5" if on_line else "2.5"
-
-            label_svg = ""
-            if label:
-                padding = 8
-                est_w = int(7.2 * len(label) + 2 * padding)
-                est_h = 22
-                box_x = sx + rr + 10
-                if box_x + est_w + 10 > VIEW_W:
-                    box_x = sx - rr - 10 - est_w
-                box_y = sy - est_h / 2
-                label_svg = f"""
-                  <g class="label-chip">
-                    <rect x="{box_x:.1f}" y="{box_y:.1f}" rx="6" ry="6" width="{est_w}" height="{est_h}"
-                          fill="rgba(17,24,39,0.86)"/>
-                    <text x="{box_x + padding:.1f}" y="{sy + 6:.1f}"
-                          fill="#fff" font-size="12" font-weight="600"
-                          style="letter-spacing:.2px">{label}</text>
-                  </g>
-                """
-
+        for (sx, sy, color, rr, label) in overlays:
+            safe_label = html.escape(str(label)) if label else ""
+            # Two-ring, beefy marker with soft fill to make it obvious
             parts.append(
-                f"""
-                <g class="guess-marker">
-                  <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr+4:.1f}"
-                          fill="none" stroke="{color}" stroke-opacity="0.55" stroke-width="{stroke_w}"/>
-                  <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                          fill="{color}" fill-opacity="{inner_opacity}"
-                          stroke="{color}" stroke-width="2"/>
-                  {label_svg}
-                </g>
-                """
+                f"""<g class="guess-marker">
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
+                              fill="{color}" fill-opacity="0.20"
+                              stroke="{color}" stroke-width="3" />
+                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{(rr-4):.1f}"
+                              fill="none" stroke="{color}" stroke-width="3" />
+                      {f'''
+                        <g class="label-chip">
+                          <rect x="{sx + rr + 10:.1f}" y="{sy - 11:.1f}" rx="6" ry="6"
+                                width="{int(7.2*len(safe_label)+16)}" height="22"
+                                fill="rgba(17,24,39,0.86)"/>
+                          <text x="{sx + rr + 18:.1f}" y="{sy + 6:.1f}"
+                                fill="#fff" font-size="12" font-weight="600"
+                                style="letter-spacing:.2px">{safe_label}</text>
+                        </g>
+                      ''' if label else ''}
+                    </g>"""
             )
         overlay_svg = "\n".join(parts)
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
-        <g transform="translate({tx},{ty}) scale({zoom})">
+        <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
           <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
         </g>
-        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}" stroke="{ring_color}"
+        <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{r_px:.1f}" stroke="{ring_color}"
                 stroke-width="{RING_STROKE}" fill="none"
                 style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
         {overlay_svg}
@@ -252,23 +237,19 @@ st.markdown(
 
       .map-wrap { margin: 0 auto 6px auto !important; }
 
-      .stTextInput { margin-top: 2px !important; margin-bottom: 0px !important; }
+      .stTextInput { margin-top: 4px !important; margin-bottom: 4px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
 
-      .sugg-list .stButton>button {
-        min-height: 44px; font-size: 1rem; border-radius: 12px; margin: 5px 0;
-      }
+      .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 8px; }
 
-      .post-input { margin-top: 8px; }
+      .post-input { margin-top: 6px; }
 
       .play-center { display:flex; justify-content:center; }
       .play-center .stButton>button {
         min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
       }
-
-      .label-chip text { paint-order: stroke; stroke: rgba(0,0,0,0.28); stroke-width: 2px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -308,99 +289,7 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# ---------- fragment compatibility shim ----------
-Fragment = getattr(st, "fragment", None)
-if Fragment is None:
-    Fragment = getattr(st, "experimental_fragment", None)
-if Fragment is None:
-    # no-op decorator (regular reruns) if neither exists
-    def Fragment(func=None, *a, **k):
-        if func is None:
-            def deco(f): return f
-            return deco
-        return func
-# -----------------------------------------------
-
-# ==================== FRAGMENT: play/end ====================
-@Fragment  # works with st.fragment, st.experimental_fragment, or as a no-op
-def render_game_fragment():
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
-
-    answer: Station = st.session_state.answer or STATIONS[0]
-    colorize=False
-    if st.session_state.history:
-        last = resolve_guess(st.session_state.history[-1], BY_KEY)
-        if last and same_line(last, answer): colorize=True
-    ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
-
-    overlays: List[Tuple] = []
-    for gname in st.session_state.history:
-        st_obj = resolve_guess(gname, BY_KEY)
-        if not st_obj or st_obj.key == answer.key:
-            continue
-        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
-        if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            on_line = same_line(st_obj, answer)
-            color = "#f59e0b" if on_line else "#ef4444"
-            radius = 36.0 if on_line else 28.0
-            overlays.append((sx, sy, color, radius, st_obj.name, on_line))
-
-    _L, mid, _R = st.columns([1,2,1])
-    with mid:
-        st.markdown(
-            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
-            unsafe_allow_html=True
-        )
-
-        if st.session_state.phase == "play":
-            q_now = st.text_input(
-                "Type to search stations",
-                key="live_guess_box",
-                placeholder="Start typing… then press Enter",
-                label_visibility="collapsed",
-            )
-            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
-            if sugg:
-                st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
-                for s in sugg:
-                    if st.button(s, key=f"sugg_{s}", use_container_width=True):
-                        st.session_state.history.append(s)
-                        st.session_state.remaining -= 1
-                        chosen = resolve_guess(s, BY_KEY)
-                        if chosen and chosen.key == answer.key:
-                            st.session_state.won = True
-                            st.session_state.phase = "end"
-                            st.session_state["feedback"] = ""
-                        else:
-                            if chosen and same_line(chosen, answer):
-                                lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
-                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
-                            else:
-                                st.session_state["feedback"] = "Wrong station."
-                            if st.session_state.remaining <= 0:
-                                st.session_state.won = False
-                                st.session_state.phase = "end"
-                        st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
-
-        if st.session_state.get("feedback"):
-            st.info(st.session_state["feedback"])
-        if st.session_state.history:
-            st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
-        st.caption(f"Guesses left: {st.session_state.remaining}")
-
-    if st.session_state.phase == "end":
-        _l, c, _r = st.columns([1,1,1])
-        with c:
-            if st.session_state.won:
-                st.success("Correct!")
-            else:
-                st.error(f"Out of guesses. The station was **{answer.name}**.")
-            if centered_play("Play again"):
-                if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
-
-# ==================== PAGES ====================
+# -------------------- WELCOME PAGE --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
@@ -419,6 +308,7 @@ if st.session_state.phase == "welcome":
         st.session_state.phase="start"
         st.rerun()
 
+# -------------------- START (choose mode once here) --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
@@ -426,5 +316,79 @@ elif st.session_state.phase == "start":
     if centered_play("Start Game"):
         if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
+# -------------------- PLAY / END --------------------
 elif st.session_state.phase in ("play","end"):
-    render_game_fragment()
+    st.markdown("# Tube Guessr")
+    render_mode_picker(title_on_top=True)
+
+    answer: Station = st.session_state.answer or STATIONS[0]
+    colorize=False
+    if st.session_state.history:
+        last = resolve_guess(st.session_state.history[-1], BY_KEY)
+        if last and same_line(last, answer): colorize=True
+    ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
+
+    # Build overlays with labels for wrong guesses
+    overlays: List[Tuple[float,float,str,float,Optional[str]]] = []
+    for gname in st.session_state.history:
+        st_obj = resolve_guess(gname, BY_KEY)
+        if not st_obj or st_obj.key == answer.key:
+            continue
+        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
+        if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
+            is_same = same_line(st_obj, answer)
+            color = "#f59e0b" if is_same else "#ef4444"  # amber for same line, red otherwise
+            overlays.append((sx, sy, color, 34.0, st_obj.name))  # bigger radius + label
+
+    _L, mid, _R = st.columns([1,2,1])
+    with mid:
+        st.markdown(
+            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+            unsafe_allow_html=True
+        )
+
+        if st.session_state.phase == "play":
+            q_now = st.text_input(
+                "Type to search stations",
+                key="live_guess_box",
+                placeholder="Start typing… then press Enter",
+                label_visibility="collapsed",
+            )
+            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
+            if sugg:
+                box = st.container()
+                for s in sugg:
+                    if box.button(s, key=f"sugg_{norm(s)}", use_container_width=True):
+                        st.session_state.history.append(s)
+                        st.session_state.remaining -= 1
+                        chosen = resolve_guess(s, BY_KEY)
+                        if chosen and chosen.key == answer.key:
+                            st.session_state.won = True
+                            st.session_state.phase = "end"
+                            st.session_state["feedback"] = ""
+                        else:
+                            if chosen and same_line(chosen, answer):
+                                lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
+                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
+                            else:
+                                st.session_state["feedback"] = "Wrong station."
+                            if st.session_state.remaining <= 0:
+                                st.session_state.won = False
+                                st.session_state.phase = "end"
+                        st.rerun()
+
+        if st.session_state.get("feedback"):
+            st.info(st.session_state["feedback"])
+        if st.session_state.history:
+            st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
+        st.caption(f"Guesses left: {st.session_state.remaining}")
+
+    if st.session_state.phase == "end":
+        _l, c, _r = st.columns([1,1,1])
+        with c:
+            if st.session_state.won:
+                st.success("Correct!")
+            else:
+                st.error(f"Out of guesses. The station was **{answer.name}**.")
+            if centered_play("Play again"):
+                if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
