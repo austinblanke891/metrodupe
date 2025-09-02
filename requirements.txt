@@ -19,16 +19,3 @@ tinycss2>=1.3.0
 cssselect2>=0.7.0
 defusedxml>=0.7.1
 lxml>=4.9.3
-
-# Core app
-streamlit==1.36.0
-
-# Imaging
-Pillow>=10.0,<12.0
-
-# Optional PDF support (only if you actually use it)
-pymupdf>=1.23,<2.0
-
-# Widgets
-streamlit-image-coordinates>=0.1.6
-streamlit-searchbox==0.1.4
