@@ -375,12 +375,31 @@ elif st.session_state.phase in ("play","end"):
             rings_and_labels.append((sx, sy, color_hex, 34.0, st_obj.name))
 
     _L, mid, _R = st.columns([1,2,1])
-    with mid:
-        components.html(
-            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels),
-            height=VIEW_H + 20,
-            scrolling=False
+   with mid:
+    html_content = make_map_html(
+        SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels
     )
+
+        components.html(f"""
+        <!doctype html>
+        <html>
+            <head><meta charset="utf-8" /></head>
+            <body style="margin:0">{html_content}
+            <script>
+              function sendHeight(){{
+                const h = document.body.scrollHeight;
+                window.parent.postMessage({{ isStreamlitMessage:true, type:'streamlit:height', height:h }}, '*');
+              }}
+              // Resize when content or fonts settle
+              new ResizeObserver(sendHeight).observe(document.body);
+              window.addEventListener('load', sendHeight);
+              setTimeout(sendHeight, 50);
+              setTimeout(sendHeight, 200);
+            </script>
+            </body>
+        </html>
+        """, height=0, scrolling=False)
+
 
 
         if st.session_state.phase == "play":
