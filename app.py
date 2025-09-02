@@ -1,6 +1,6 @@
-# Tube Guessr — classic centered crop + reliable mobile greyscale
-# Map drawn inside a sandboxed <svg> using <image> + feColorMatrix (works on iOS)
-# Keeps the exact 980x620 crop and puts the guess bar flush under the map.
+# Tube Guessr — classic centered crop + mobile-friendly responsive scaling
+# Map drawn inside a sandboxed <svg> (image + feColorMatrix), crop identical to original.
+# The SVG scales to container width; iframe height auto-updates so the guess bar stays flush.
 
 import base64
 import csv
@@ -186,11 +186,17 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP RENDER (SVG <image> + feColorMatrix) --------------------
-def make_map_srcdoc(svg_data_uri: str, baseW: float, baseH: float,
-                    tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
-                    overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+# -------------------- MAP (responsive SVG inside sandbox) --------------------
+def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
+                               tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
+                               overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    """
+    Same centered crop in a 980x620 viewBox, but the <svg> scales to 100% width.
+    A tiny script resizes the component's height so the input sits flush below on mobile.
+    """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
+    filter_attr = '' if colorize else 'filter="url(#gray)"'
+
     overlay_svg = ""
     if overlays:
         overlay_svg = "\n".join(
@@ -198,40 +204,63 @@ def make_map_srcdoc(svg_data_uri: str, baseW: float, baseH: float,
             f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" />'
             for (sx, sy, color, rr) in overlays
         )
-    # We draw everything inside ONE SVG. The map comes from <image> (data URI),
-    # and we tint it gray with feColorMatrix (works on iOS).
-    filter_attr = '' if colorize else 'filter="url(#gray)"'
+
+    ratio = VIEW_H / VIEW_W
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html,body {{ margin:0; padding:0; background:transparent; }}
+  .wrap {{ width:100%; max-width:{VIEW_W}px; margin:0 auto; }}
+  /* Let the SVG fill width while keeping the 980x620 aspect */
+  svg#mapsvg {{ display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }}
 </style>
 </head>
 <body>
-  <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="{VIEW_W}" height="{VIEW_H}">
-    <defs>
-      <filter id="gray">
-        <feColorMatrix type="matrix"
-          values="0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0      0      0      1 0"/>
-      </filter>
-    </defs>
+  <div class="wrap">
+    <svg id="mapsvg" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="gray">
+          <feColorMatrix type="matrix"
+            values="0.2126 0.7152 0.0722 0 0
+                    0.2126 0.7152 0.0722 0 0
+                    0.2126 0.7152 0.0722 0 0
+                    0      0      0      1 0"/>
+        </filter>
+      </defs>
 
-    <!-- Map image positioned by translate+scale, then grey-filtered -->
-    <g transform="translate({tx},{ty}) scale({zoom})">
-      <image href="{svg_data_uri}" width="{baseW}" height="{baseH}" {filter_attr}/>
-    </g>
+      <!-- Map image positioned by translate+scale, then grey-filtered -->
+      <g transform="translate({tx},{ty}) scale({zoom})">
+        <image href="{svg_data_uri}" width="{baseW}" height="{baseH}" {filter_attr}/>
+      </g>
 
-    <!-- Center ring -->
-    <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-            stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
+      <!-- Center ring -->
+      <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+              stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
 
-    <!-- Wrong-guess markers -->
-    {overlay_svg}
-  </svg>
+      <!-- Wrong-guess markers -->
+      {overlay_svg}
+    </svg>
+  </div>
+
+  <script>
+    (function(){{
+      const RATIO = {ratio};
+      function resize() {{
+        const svg = document.getElementById('mapsvg');
+        const w = svg.getBoundingClientRect().width;
+        const h = w * RATIO;
+        // Ensure the element's rendered height matches aspect so parent can size correctly
+        svg.style.height = h + 'px';
+        // Tell Streamlit to size the iframe so the input below sits flush
+        window.parent.postMessage({{type:'streamlit:setFrameHeight', height: Math.ceil(h)}}, '*');
+      }}
+      window.addEventListener('load', resize);
+      window.addEventListener('resize', resize);
+      // A few retries in case fonts/layout shift
+      setTimeout(resize, 60); setTimeout(resize, 180); setTimeout(resize, 360);
+    }})();
+  </script>
 </body></html>"""
 
 # -------------------- CARDS --------------------
@@ -275,6 +304,33 @@ def centered_play(label, key=None, top_margin_px: int = 0):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
+# -------------------- SUGGEST/RESOLVE --------------------
+def alias_name(q: str) -> str:
+    return ALIASES.get(norm(q), q)
+
+def resolve_guess(q: str, by_key: Dict[str, Station]) -> Optional[Station]:
+    q = alias_name(q)
+    nq = norm(q)
+    if not nq: return None
+    if nq in by_key: return by_key[nq]
+    for s in by_key.values():
+        if norm(s.name) == nq or norm(clean_display(s.name)) == nq:
+            return s
+    return None
+
+def same_line(a: Station, b: Station) -> bool:
+    return bool(set(a.lines) & set(b.lines))
+
+def overlap_lines(a: Station, b: Station) -> List[str]:
+    return sorted(list(set(a.lines) & set(b.lines)))
+
+def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
+    q = (q or "").strip().lower()
+    if not q:
+        return []
+    matches = [n for n in names if n.lower().startswith(q)]
+    return sorted(matches)[:limit]
+
 # -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
 def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_w, svg_h):
@@ -299,9 +355,10 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Classic fixed canvas: exact same crop/center as your original
-        srcdoc = make_map_srcdoc(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
+        # Responsive, centered map in sandbox (crop math unchanged)
+        srcdoc = make_map_srcdoc_responsive(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
+        # Initial height is the desktop height; JS will shrink/expand to exact mobile height
+        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
@@ -353,33 +410,6 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_
             if centered_play("Play again", key="play_again_btn", top_margin_px=16):
                 if start_round(stations, by_key, names): st.rerun()
 
-# -------------------- ORIGINAL HELPERS --------------------
-def alias_name(q: str) -> str:
-    return ALIASES.get(norm(q), q)
-
-def resolve_guess(q: str, by_key: Dict[str, Station]) -> Optional[Station]:
-    q = alias_name(q)
-    nq = norm(q)
-    if not nq: return None
-    if nq in by_key: return by_key[nq]
-    for s in by_key.values():
-        if norm(s.name) == nq or norm(clean_display(s.name)) == nq:
-            return s
-    return None
-
-def same_line(a: Station, b: Station) -> bool:
-    return bool(set(a.lines) & set(b.lines))
-
-def overlap_lines(a: Station, b: Station) -> List[str]:
-    return sorted(list(set(a.lines) & set(b.lines)))
-
-def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
-    q = (q or "").strip().lower()
-    if not q:
-        return []
-    matches = [n for n in names if n.lower().startswith(q)]
-    return sorted(matches)[:limit]
-
 # -------------------- SESSION & APP --------------------
 if "phase" not in st.session_state:
     st.session_state.phase="welcome"
@@ -394,6 +424,12 @@ if "feedback" not in st.session_state:
 SVG_DATA_URI, SVG_W, SVG_H = load_svg_datauri(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
+def centered_play(label, key=None, top_margin_px: int = 0):
+    st.markdown(f'<div class="play-center" style="margin-top:{top_margin_px}px;">', unsafe_allow_html=True)
+    clicked = st.button(label, type="primary", key=key)
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
+
 def render_mode_picker(title_on_top=False):
     if title_on_top:
         st.markdown("### Mode")
@@ -406,12 +442,6 @@ def render_mode_picker(title_on_top=False):
         key="mode_radio"
     )
     st.session_state.mode = choice
-
-def centered_play(label, key=None, top_margin_px: int = 0):
-    st.markdown(f'<div class="play-center" style="margin-top:{top_margin_px}px;">', unsafe_allow_html=True)
-    clicked = st.button(label, type="primary", key=key)
-    st.markdown('</div>', unsafe_allow_html=True)
-    return clicked
 
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
