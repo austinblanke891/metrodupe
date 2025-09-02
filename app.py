@@ -1,7 +1,7 @@
-# Tube Guessr — vector-cropped (crisp) map rendering
-# - SVG is cropped/rasterized at VIEW_W×VIEW_H per round using CairoSVG
-# - Grayscale is baked server-side (no blur-inducing browser filters)
-# - Guess bar sits right under the map with minimal spacing
+# Tube Guessr — vector crop when possible, CSS crop fallback when CairoSVG isn't available.
+# - If CairoSVG loads: we render a vector-accurate crop to PNG server-side (crisp, robust grayscale).
+# - If CairoSVG is not available: we fall back to client-side SVG + CSS transform cropping (still crisp).
+# - Guess bar is directly under the map with minimal spacing.
 
 import base64
 import csv
@@ -13,15 +13,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PIL import Image
-import cairosvg
 import streamlit as st
+from PIL import Image
+
+# Try CairoSVG; if it fails (system Cairo missing), we will use CSS-crop fallback.
+CAIRO_OK = False
+CAIRO_IMPORT_ERROR = None
+try:
+    import cairosvg  # type: ignore
+    CAIRO_OK = True
+except Exception as _e:
+    CAIRO_OK = False
+    CAIRO_IMPORT_ERROR = repr(_e)
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"     # Original vector SVG
-DB_PATH = BASE_DIR / "stations_db.csv"           # name,fx,fy,lines
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"     # Original SVG
+DB_PATH  = BASE_DIR / "stations_db.csv"          # name,fx,fy,lines
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -88,44 +97,35 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SUGGEST / RESOLVE --------------------
-def alias_name(q: str) -> str:
-    return ALIASES.get(norm(q), q)
-
-def resolve_guess(q: str, by_key: Dict[str, Station]) -> Optional[Station]:
-    q = alias_name(q)
-    nq = norm(q)
-    if not nq: return None
-    if nq in by_key: return by_key[nq]
-    for s in by_key.values():
-        if norm(s.name) == nq or norm(clean_display(s.name)) == nq:
-            return s
-    return None
-
-def same_line(a: Station, b: Station) -> bool:
-    return bool(set(a.lines) & set(b.lines))
-
-def overlap_lines(a: Station, b: Station) -> List[str]:
-    return sorted(list(set(a.lines) & set(b.lines)))
-
-def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
-    q = (q or "").strip().lower()
-    if not q:
-        return []
-    matches = [n for n in names if n.lower().startswith(q)]
-    return sorted(matches)[:limit]
-
-# -------------------- SVG / VECTOR RENDER --------------------
+# -------------------- ASSET LOADERS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_text(svg_path: Path) -> str:
     return svg_path.read_text("utf-8", errors="ignore")
 
+@st.cache_resource(show_spinner=False)
+def load_svg_uri_and_size(svg_path: Path) -> Tuple[str, float, float]:
+    raw = svg_path.read_bytes()
+    txt = raw.decode("utf-8", errors="ignore")
+    m = re.search(r'viewBox\s*=\s*"([\d.\s\-]+)"', txt)
+    if m:
+        _, _, w_str, h_str = m.group(1).split()
+        base_w = float(w_str); base_h = float(h_str)
+    else:
+        def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
+        w_attr = re.search(r'width="([^"]+)"', txt)
+        h_attr = re.search(r'height="([^"]+)"', txt)
+        base_w = f(w_attr.group(1) if w_attr else None)
+        base_h = f(h_attr.group(1) if h_attr else None)
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}", base_w, base_h
+
+# -------------------- GEOMETRY HELPERS --------------------
 def _parse_svg_size(svg_text: str) -> Tuple[float, float]:
-    """Return (base_w, base_h) from viewBox or width/height."""
     m = re.search(r'viewBox\s*=\s*"([\d.\s\-]+)"', svg_text)
     if m:
         _, _, w, h = (float(x) for x in m.group(1).split())
         return w, h
+    # fallback
     def _f(rx, default):
         m = re.search(rx, svg_text)
         if not m: return default
@@ -134,27 +134,45 @@ def _parse_svg_size(svg_text: str) -> Tuple[float, float]:
         except: return default
     return _f(r'width="([^"]+)"', 3200.0), _f(r'height="([^"]+)"', 2200.0)
 
+def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
+    cx, cy = fx_center * baseW, fy_center * baseH
+    tx = VIEW_W / 2 - cx * zoom
+    ty = VIEW_H / 2 - cy * zoom
+    return tx, ty
+
+def project_to_screen_css(baseW: float, baseH: float, fx_c: float, fy_c: float,
+                          fx_t: float, fy_t: float, zoom: float) -> Tuple[float, float]:
+    tx, ty = css_transform(baseW, baseH, fx_c, fy_c, zoom)
+    x = fx_t * baseW * zoom + tx
+    y = fy_t * baseH * zoom + ty
+    return x, y
+
 def _crop_params(svg_text: str, fx_center: float, fy_center: float,
                  view_w: int, view_h: int, zoom: float) -> Tuple[float, float, float, float, float, float]:
-    """Return base_w, base_h, x0, y0, crop_w, crop_h (all in SVG units)."""
     base_w, base_h = _parse_svg_size(svg_text)
     crop_w = view_w / zoom
     crop_h = view_h / zoom
     cx = fx_center * base_w
     cy = fy_center * base_h
-    # Clamp within bounds
     x0 = max(0.0, min(base_w - crop_w, cx - crop_w / 2))
     y0 = max(0.0, min(base_h - crop_h, cy - crop_h / 2))
     return base_w, base_h, x0, y0, crop_w, crop_h
 
+def project_to_screen_vector(svg_text: str, fx_center: float, fy_center: float,
+                             fx_target: float, fy_target: float,
+                             view_w: int, view_h: int, zoom: float) -> Tuple[float, float]:
+    base_w, base_h, x0, y0, crop_w, crop_h = _crop_params(svg_text, fx_center, fy_center, view_w, view_h, zoom)
+    x = ((fx_target * base_w) - x0) / crop_w * view_w
+    y = ((fy_target * base_h) - y0) / crop_h * view_h
+    return x, y
+
+# -------------------- RENDERERS --------------------
 @st.cache_data(show_spinner=False)
 def render_crop_data_uri(svg_text: str, fx_center: float, fy_center: float,
                          view_w: int, view_h: int, zoom: float,
                          grayscale: bool) -> str:
-    """Crop original SVG at vector-level and rasterize directly to view_w×view_h."""
+    """Vector crop → PNG using CairoSVG. Cached by inputs."""
     base_w, base_h, x0, y0, crop_w, crop_h = _crop_params(svg_text, fx_center, fy_center, view_w, view_h, zoom)
-
-    # Rewrite viewBox & explicit width/height for the crop
     out = svg_text
     if re.search(r'viewBox\s*=\s*"[^"]+"', out):
         out = re.sub(r'viewBox\s*=\s*"[^"]+"',
@@ -162,65 +180,79 @@ def render_crop_data_uri(svg_text: str, fx_center: float, fy_center: float,
                      out, count=1)
     else:
         out = out.replace("<svg", f'<svg viewBox="{x0} {y0} {crop_w} {crop_h}"', 1)
-
     if re.search(r'width="[^"]+"', out):
         out = re.sub(r'width="[^"]+"',  f'width="{view_w}px"', out, count=1)
     else:
         out = out.replace("<svg", f'<svg width="{view_w}px"', 1)
-
     if re.search(r'height="[^"]+"', out):
         out = re.sub(r'height="[^"]+"', f'height="{view_h}px"', out, count=1)
     else:
         out = out.replace("<svg", f'<svg height="{view_h}px"', 1)
 
-    # Vector -> PNG at final pixels
     png_bytes = cairosvg.svg2png(bytestring=out.encode("utf-8"),
                                  output_width=view_w,
                                  output_height=view_h)
 
-    # Optional: bake grayscale (keeps sharpness)
     if grayscale:
         im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
         g = im.convert("L")
-        im = Image.merge("RGBA", (g, g, g, im.split()[-1]))  # keep alpha
-        buf = io.BytesIO()
-        im.save(buf, format="PNG")
+        im = Image.merge("RGBA", (g, g, g, im.split()[-1]))
+        buf = io.BytesIO(); im.save(buf, format="PNG")
         png_bytes = buf.getvalue()
 
     b64 = base64.b64encode(png_bytes).decode("ascii")
     return f"data:image/png;base64,{b64}"
 
-def project_to_screen(svg_text: str, fx_center: float, fy_center: float,
-                      fx_target: float, fy_target: float,
-                      view_w: int, view_h: int, zoom: float) -> Tuple[float, float]:
-    """Given center and a target (fx,fy), return on-screen px (sx,sy)."""
-    base_w, base_h, x0, y0, crop_w, crop_h = _crop_params(svg_text, fx_center, fy_center, view_w, view_h, zoom)
-    x = ((fx_target * base_w) - x0) / crop_w * view_w
-    y = ((fy_target * base_h) - y0) / crop_h * view_h
-    return x, y
-
-def make_map_html_vector_crop(svg_text: str,
-                              fx_center: float, fy_center: float,
-                              zoom: float, colorize: bool, ring_color: str,
-                              overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """Return HTML with the cropped PNG and an overlay SVG for ring/markers."""
+def make_map_html_vector(svg_text: str,
+                         fx_center: float, fy_center: float,
+                         zoom: float, colorize: bool, ring_color: str,
+                         overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     uri = render_crop_data_uri(svg_text, fx_center, fy_center, VIEW_W, VIEW_H, zoom, grayscale=(not colorize))
     r_px = max(RING_PX, 0.010 * min(VIEW_W, VIEW_H))
-
     overlay_svg = ""
     if overlays:
-        parts = []
-        for (sx, sy, color, rr) in overlays:
-            parts.append(
-                f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
-                f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2"/>'
-            )
-        overlay_svg = "\n".join(parts)
-
+        overlay_svg = "\n".join(
+            f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2"/>'
+            for (sx, sy, color, rr) in overlays
+        )
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
       <img src="{uri}" width="{VIEW_W}" height="{VIEW_H}"
            style="display:block;border-radius:14px;" alt="map crop"/>
+      <svg width="{VIEW_W}" height="{VIEW_H}"
+           style="position:absolute;left:0;top:0;pointer-events:none;">
+        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+                stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"
+                style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+        {overlay_svg}
+      </svg>
+    </div>
+    """
+
+def make_map_html_css(svg_uri: str, baseW: float, baseH: float,
+                      fx_center: float, fy_center: float,
+                      zoom: float, colorize: bool, ring_color: str,
+                      overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    r_px = max(RING_PX, 0.010 * min(VIEW_W, VIEW_H))
+    gray_filter = "grayscale(1)" if not colorize else "none"
+
+    overlay_svg = ""
+    if overlays:
+        overlay_svg = "\n".join(
+            f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2"/>'
+            for (sx, sy, color, rr) in overlays
+        )
+
+    # Use an <img> tag for the whole SVG and crop with CSS transform (no blur).
+    return f"""
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
+      <div style="width:{VIEW_W}px;height:{VIEW_H}px;overflow:hidden;border-radius:14px;position:relative;background:#f6f7f8;">
+        <img src="{svg_uri}" alt="map"
+             style="position:absolute;left:{tx}px;top:{ty}px;width:{baseW*zoom}px;height:{baseH*zoom}px;
+                    image-rendering:crisp-edges;image-rendering:-webkit-optimize-contrast;
+                    -webkit-filter:{gray_filter};filter:{gray_filter};" />
+      </div>
       <svg width="{VIEW_W}" height="{VIEW_H}"
            style="position:absolute;left:0;top:0;pointer-events:none;">
         <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
@@ -236,12 +268,12 @@ def start_round(stations, by_key, names):
     if not stations:
         st.warning("No stations found in stations_db.csv.")
         return False
-    st.session_state.phase = "play"
-    st.session_state.history = []
-    st.session_state.remaining = MAX_GUESSES
-    st.session_state.won = False
+    st.session_state.phase="play"
+    st.session_state.history=[]
+    st.session_state.remaining=MAX_GUESSES
+    st.session_state.won=False
     st.session_state["feedback"] = ""
-    rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode == "daily" else random.Random()
+    rng = random.Random(20250501 + dt.date.today().toordinal()) if st.session_state.mode=="daily" else random.Random()
     choice_name = rng.choice(names)
     st.session_state.answer = by_key[norm(choice_name)]
     return True
@@ -249,7 +281,7 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Global CSS: tighter spacing; guess bar sits right under the map
+# Global CSS
 st.markdown(
     """
     <style>
@@ -275,17 +307,18 @@ st.markdown(
 
 # Session state
 if "phase" not in st.session_state:
-    st.session_state.phase = "welcome"
-    st.session_state.mode = "daily"
-    st.session_state.answer = None
-    st.session_state.remaining = MAX_GUESSES
-    st.session_state.history = []
-    st.session_state.won = False
+    st.session_state.phase="welcome"
+    st.session_state.mode="daily"
+    st.session_state.answer=None
+    st.session_state.remaining=MAX_GUESSES
+    st.session_state.history=[]
+    st.session_state.won=False
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-# Load data/assets
+# Load assets/data
 SVG_TEXT = load_svg_text(SVG_PATH)
+SVG_URI, SVG_W, SVG_H = load_svg_uri_and_size(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # Helpers
@@ -307,6 +340,16 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
+# Fallback notice (only show once when Cairo is missing)
+if not CAIRO_OK and CAIRO_IMPORT_ERROR and "render_notice_shown" not in st.session_state:
+    st.info(
+        "Vector rasterizer (CairoSVG) isn’t available on this host, so the app is "
+        "using the live SVG crop fallback. It stays crisp; if you want server-side "
+        "grayscale too, deploy with system Cairo. "
+        f"(Import error: {CAIRO_IMPORT_ERROR[:120]}…)"
+    )
+    st.session_state["render_notice_shown"] = True
+
 # -------------------- WELCOME --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
@@ -323,7 +366,7 @@ if st.session_state.phase == "welcome":
     )
     st.divider()
     if centered_play("Play"):
-        st.session_state.phase = "start"
+        st.session_state.phase="start"
         st.rerun()
 
 # -------------------- START --------------------
@@ -335,36 +378,39 @@ elif st.session_state.phase == "start":
         if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
 # -------------------- PLAY / END --------------------
-elif st.session_state.phase in ("play", "end"):
+elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
 
     answer: Station = st.session_state.answer or STATIONS[0]
-    colorize = False
+    colorize=False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
-        if last and same_line(last, answer):
-            colorize = True
+        if last and bool(set(last.lines) & set(answer.lines)): colorize=True
 
-    ring = "#22c55e" if (st.session_state.phase == "end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
+    ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build overlays for previous guesses (project onto current crop)
-    overlays: List[Tuple[float, float, str, float]] = []
+    # Build overlays
+    overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
-        st_obj = resolve_guess(gname, BY_KEY)
+        st_obj = BY_KEY.get(norm(gname))
         if not st_obj or st_obj.key == answer.key:
             continue
-        sx, sy = project_to_screen(SVG_TEXT, answer.fx, answer.fy, st_obj.fx, st_obj.fy, VIEW_W, VIEW_H, ZOOM)
+        if CAIRO_OK:
+            sx, sy = project_to_screen_vector(SVG_TEXT, answer.fx, answer.fy, st_obj.fx, st_obj.fy, VIEW_W, VIEW_H, ZOOM)
+        else:
+            sx, sy = project_to_screen_css(SVG_W, SVG_H, answer.fx, answer.fy, st_obj.fx, st_obj.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
+            color = "#f59e0b" if bool(set(st_obj.lines) & set(answer.lines)) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Center column: map + input + feedback
-    _L, mid, _R = st.columns([1, 2, 1])
+    # Center layout
+    _L, mid, _R = st.columns([1,2,1])
     with mid:
-        html = make_map_html_vector_crop(
-            SVG_TEXT, answer.fx, answer.fy, ZOOM, colorize, ring, overlays
-        )
+        if CAIRO_OK:
+            html = make_map_html_vector(SVG_TEXT, answer.fx, answer.fy, ZOOM, colorize, ring, overlays)
+        else:
+            html = make_map_html_css(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays)
         st.markdown(html, unsafe_allow_html=True)
 
         if st.session_state.phase == "play":
@@ -374,22 +420,26 @@ elif st.session_state.phase in ("play", "end"):
                 placeholder="Start typing… then press Enter",
                 label_visibility="collapsed",
             )
-            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
-            if sugg:
+            # suggestions directly under map
+            names_sorted = NAMES
+            if q_now:
+                ql = q_now.lower().strip()
+                names_sorted = [n for n in NAMES if n.lower().startswith(ql)][:5]
+            if names_sorted and q_now:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
-                for s in sugg:
+                for s in names_sorted:
                     if st.button(s, key=f"sugg_{s}", use_container_width=True):
                         st.session_state.history.append(s)
                         st.session_state.remaining -= 1
-                        chosen = resolve_guess(s, BY_KEY)
+                        chosen = BY_KEY.get(norm(s))
                         if chosen and chosen.key == answer.key:
                             st.session_state.won = True
                             st.session_state.phase = "end"
                             st.session_state["feedback"] = ""
                         else:
-                            if chosen and same_line(chosen, answer):
-                                lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
-                                st.session_state["feedback"] = f"Wrong station, but correct line ({lines})."
+                            if chosen and bool(set(chosen.lines) & set(answer.lines)):
+                                overlap = ", ".join(sorted(set(chosen.lines) & set(answer.lines))) or "right line"
+                                st.session_state["feedback"] = f"Wrong station, but correct line ({overlap})."
                             else:
                                 st.session_state["feedback"] = "Wrong station."
                             if st.session_state.remaining <= 0:
@@ -405,7 +455,7 @@ elif st.session_state.phase in ("play", "end"):
         st.caption(f"Guesses left: {st.session_state.remaining}")
 
     if st.session_state.phase == "end":
-        _l, c, _r = st.columns([1, 1, 1])
+        _l, c, _r = st.columns([1,1,1])
         with c:
             if st.session_state.won:
                 st.success("Correct!")
