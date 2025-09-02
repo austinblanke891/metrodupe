@@ -375,7 +375,7 @@ elif st.session_state.phase in ("play","end"):
             rings_and_labels.append((sx, sy, color_hex, 34.0, st_obj.name))
 
     _L, mid, _R = st.columns([1,2,1])
-   with mid:
+    with mid:
     html_content = make_map_html(
         SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels
     )
