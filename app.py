@@ -1,4 +1,4 @@
-# Tube Guessr — stable overlay (SVG rings + SVG labels) — gapless input (robust auto-height iframe)
+# Tube Guessr — stable overlay (SVG rings + SVG labels) — gapless (no iframe)
 import base64
 import csv
 import datetime as dt
@@ -10,16 +10,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG (no labels)
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620   # SVG viewBox; aspect ratio maintained
+VIEW_W, VIEW_H = 980, 620   # SVG viewBox target in the page
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -232,13 +231,12 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Tight spacing; tiny gap under iframe
 st.markdown(
     """
     <style>
       .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
-      [data-testid="stIFrame"] { margin-bottom: 6px !important; }  /* small gap between map and input */
+      .stTextInput { margin-top: 4px !important; margin-bottom: 4px !important; }
       .stTextInput>div>div>input { text-align:center; height:44px; line-height:44px; font-size:1rem; }
       .stButton>button { min-height:44px; font-size:1rem; border-radius:10px; margin-bottom:8px; }
       .post-input { margin-top:6px; }
@@ -335,52 +333,10 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map HTML
-        inner = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels)
+        html_map = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels)
+        # *** KEY CHANGE: render inline (no iframe) => no big gap ***
+        st.markdown(html_map, unsafe_allow_html=True)
 
-        # Robust auto-height iframe:
-        # - Start with a safe fallback height (VIEW_H) so the map is visible immediately.
-        # - Post both 'streamlit:height' and 'streamlit:setFrameHeight' (covers Streamlit variants).
-        # - Use ResizeObserver + a few timed retries.
-        components.html(
-            f"""
-            <!doctype html>
-            <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <style>html,body{{margin:0;padding:0}}</style>
-              </head>
-              <body>
-                {inner}
-                <script>
-                  const target = document.querySelector('.map-wrap') || document.body;
-                  function postH(h){{
-                    const msg1 = {{ isStreamlitMessage:true, type:'streamlit:height', height:h }};
-                    const msg2 = {{ isStreamlitMessage:true, type:'streamlit:setFrameHeight', height:h }};
-                    window.parent.postMessage(msg1, '*');
-                    window.parent.postMessage(msg2, '*');
-                  }}
-                  function sendHeight(){{
-                    const rect = target.getBoundingClientRect();
-                    const h = Math.ceil(rect.height);
-                    postH(h);
-                  }}
-                  new ResizeObserver(sendHeight).observe(target);
-                  window.addEventListener('load', sendHeight);
-                  setTimeout(sendHeight, 50);
-                  setTimeout(sendHeight, 150);
-                  setTimeout(sendHeight, 300);
-                  setTimeout(sendHeight, 600);
-                </script>
-              </body>
-            </html>
-            """,
-            height=VIEW_H,     # fallback so the map is visible even if JS hasn’t run yet
-            scrolling=False,
-        )
-
-        # Input right beneath the iframe (small fixed 6px gap from CSS rule above)
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
