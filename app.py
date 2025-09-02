@@ -1,4 +1,4 @@
-# Tube Guessr — stable overlay (SVG rings + SVG labels) — no-gap input (auto height iframe)
+# Tube Guessr — stable overlay (SVG rings + SVG labels) — gapless input (robust auto-height iframe)
 import base64
 import csv
 import datetime as dt
@@ -15,11 +15,11 @@ import streamlit.components.v1 as components
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620   # SVG viewBox (aspect ratio)
+VIEW_W, VIEW_H = 980, 620   # SVG viewBox; aspect ratio maintained
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -82,7 +82,7 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SUGGEST/RESOLVE --------------------
+# -------------------- LOOKUP / SUGGEST --------------------
 def alias_name(q: str) -> str:
     return ALIASES.get(norm(q), q)
 
@@ -129,7 +129,7 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
-# -------------------- GEOMETRY / PROJECTION --------------------
+# -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
@@ -145,7 +145,7 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- RENDER --------------------
+# -------------------- RENDER (SVG with rings + chips) --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
@@ -164,7 +164,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
-    # Guess markers + label chips rendered INSIDE the SVG
     ring_and_label_svg = ""
     if rings_and_labels:
         parts = []
@@ -184,7 +183,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                 chip_w = pad_x*2 + char_w * len(safe_label)
                 lx = sx + rr + 10.0
                 ly = sy - chip_h/2
-                # keep inside the viewBox
                 if lx + chip_w > VIEW_W - 6:
                     lx = max(6.0, sx - rr - 10.0 - chip_w)
                 lx = min(max(lx, 6.0), VIEW_W - chip_w - 6.0)
@@ -234,23 +232,18 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Tight spacing + small gap under iframe
+# Tight spacing; tiny gap under iframe
 st.markdown(
     """
     <style>
       .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
-
-      /* Remove big default bottom spacing under iframes (components.html) */
-      [data-testid="stIFrame"] { margin-bottom: 6px !important; }
-
-      .stTextInput>div>div>input {
-        text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
-      }
-      .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 8px; }
-      .post-input { margin-top: 6px; }
+      [data-testid="stIFrame"] { margin-bottom: 6px !important; }  /* small gap between map and input */
+      .stTextInput>div>div>input { text-align:center; height:44px; line-height:44px; font-size:1rem; }
+      .stButton>button { min-height:44px; font-size:1rem; border-radius:10px; margin-bottom:8px; }
+      .post-input { margin-top:6px; }
       .play-center { display:flex; justify-content:center; }
-      .play-center .stButton>button { min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem; }
+      .play-center .stButton>button { min-width:220px; border-radius:9999px; padding:10px 18px; font-size:1rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -329,7 +322,7 @@ elif st.session_state.phase in ("play","end"):
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build rings + labels (all in SVG)
+    # Build rings + labels (in SVG)
     rings_and_labels: List[Tuple[float,float,str,float,str]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
@@ -342,8 +335,13 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # --- Map in auto-height iframe (NO GAP) ---
+        # Map HTML
         inner = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels)
+
+        # Robust auto-height iframe:
+        # - Start with a safe fallback height (VIEW_H) so the map is visible immediately.
+        # - Post both 'streamlit:height' and 'streamlit:setFrameHeight' (covers Streamlit variants).
+        # - Use ResizeObserver + a few timed retries.
         components.html(
             f"""
             <!doctype html>
@@ -357,26 +355,32 @@ elif st.session_state.phase in ("play","end"):
                 {inner}
                 <script>
                   const target = document.querySelector('.map-wrap') || document.body;
-                  function sendHeight(){{
-                    const h = Math.ceil(target.getBoundingClientRect().height);
-                    window.parent.postMessage({{ isStreamlitMessage: true, type: 'streamlit:height', height: h }}, '*');
+                  function postH(h){{
+                    const msg1 = {{ isStreamlitMessage:true, type:'streamlit:height', height:h }};
+                    const msg2 = {{ isStreamlitMessage:true, type:'streamlit:setFrameHeight', height:h }};
+                    window.parent.postMessage(msg1, '*');
+                    window.parent.postMessage(msg2, '*');
                   }}
-                  // observe size changes
+                  function sendHeight(){{
+                    const rect = target.getBoundingClientRect();
+                    const h = Math.ceil(rect.height);
+                    postH(h);
+                  }}
                   new ResizeObserver(sendHeight).observe(target);
                   window.addEventListener('load', sendHeight);
-                  // a few retries while fonts/layout settle
                   setTimeout(sendHeight, 50);
                   setTimeout(sendHeight, 150);
                   setTimeout(sendHeight, 300);
+                  setTimeout(sendHeight, 600);
                 </script>
               </body>
             </html>
             """,
-            height=0,          # let JS set the true height → no internal blank space
+            height=VIEW_H,     # fallback so the map is visible even if JS hasn’t run yet
             scrolling=False,
         )
 
-        # Input sits immediately under the iframe with a tight gap (6px from CSS)
+        # Input right beneath the iframe (small fixed 6px gap from CSS rule above)
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
