@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 
+import streamlit.components.v1 as components
+
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
@@ -362,10 +364,12 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        st.markdown(
+        components.html(
             make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels),
-            unsafe_allow_html=True
-        )
+            height=VIEW_H + 20,
+            scrolling=False
+    )
+
 
         if st.session_state.phase == "play":
             q_now = st.text_input(
