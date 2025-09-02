@@ -186,13 +186,14 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (responsive SVG inside sandbox) --------------------
+# -------------------- MAP (responsive SVG; iframe autoresize) --------------------
 def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
                                tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                                overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
     Same centered crop in a 980x620 viewBox, but the <svg> scales to 100% width.
-    A tiny script resizes the component's height so the input sits flush below on mobile.
+    Script posts 'componentReady' and 'setFrameHeight' so the iframe hugs the map,
+    putting the guess bar directly underneath with no gap.
     """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     filter_attr = '' if colorize else 'filter="url(#gray)"'
@@ -212,7 +213,6 @@ def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
 <style>
   html,body {{ margin:0; padding:0; background:transparent; }}
   .wrap {{ width:100%; max-width:{VIEW_W}px; margin:0 auto; }}
-  /* Let the SVG fill width while keeping the 980x620 aspect */
   svg#mapsvg {{ display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }}
 </style>
 </head>
@@ -246,18 +246,23 @@ def make_map_srcdoc_responsive(svg_data_uri: str, baseW: float, baseH: float,
   <script>
     (function(){{
       const RATIO = {ratio};
-      function resize() {{
+      function calcHeight() {{
         const svg = document.getElementById('mapsvg');
         const w = svg.getBoundingClientRect().width;
-        const h = w * RATIO;
-        // Ensure the element's rendered height matches aspect so parent can size correctly
+        return Math.max(1, Math.ceil(w * RATIO));
+      }}
+      function sendHeight(h) {{
+        window.parent.postMessage({{ type:'streamlit:componentReady', height:h }}, '*');
+        window.parent.postMessage({{ type:'streamlit:setFrameHeight', height:h }}, '*');
+      }}
+      function resize() {{
+        const h = calcHeight();
+        const svg = document.getElementById('mapsvg');
         svg.style.height = h + 'px';
-        // Tell Streamlit to size the iframe so the input below sits flush
-        window.parent.postMessage({{type:'streamlit:setFrameHeight', height: Math.ceil(h)}}, '*');
+        sendHeight(h);
       }}
       window.addEventListener('load', resize);
       window.addEventListener('resize', resize);
-      // A few retries in case fonts/layout shift
       setTimeout(resize, 60); setTimeout(resize, 180); setTimeout(resize, 360);
     }})();
   </script>
@@ -357,8 +362,8 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_
     with mid:
         # Responsive, centered map in sandbox (crop math unchanged)
         srcdoc = make_map_srcdoc_responsive(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        # Initial height is the desktop height; JS will shrink/expand to exact mobile height
-        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
+        # Give a tiny initial height; JS immediately resizes -> no gap under the map
+        st_html(srcdoc, height=10, width=None, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
