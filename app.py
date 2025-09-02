@@ -1,4 +1,4 @@
-# Tube Guessr — smoother reruns via fragment + clearer wrong-guess markers with labels
+# Tube Guessr — smoother reruns via fragment (with compatibility shim)
 import base64
 import csv
 import datetime as dt
@@ -174,21 +174,18 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
             label = tup[4] if len(tup) >= 5 else ""
             on_line = tup[5] if len(tup) >= 6 else False
 
-            # stronger marker: concentric ring + glow-ish fill
             inner_opacity = "0.28" if on_line else "0.20"
             stroke_w = "3.5" if on_line else "2.5"
 
             label_svg = ""
             if label:
                 padding = 8
-                est_w = int(7.2 * len(label) + 2 * padding)   # very rough width
+                est_w = int(7.2 * len(label) + 2 * padding)
                 est_h = 22
-                # try to place to the right, unless we are near the right edge
                 box_x = sx + rr + 10
                 if box_x + est_w + 10 > VIEW_W:
                     box_x = sx - rr - 10 - est_w
                 box_y = sy - est_h / 2
-
                 label_svg = f"""
                   <g class="label-chip">
                     <rect x="{box_x:.1f}" y="{box_y:.1f}" rx="6" ry="6" width="{est_w}" height="{est_h}"
@@ -271,7 +268,6 @@ st.markdown(
         min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
       }
 
-      /* Make labels crisper over the map */
       .label-chip text { paint-order: stroke; stroke: rgba(0,0,0,0.28); stroke-width: 2px; }
     </style>
     """,
@@ -312,8 +308,21 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
+# ---------- fragment compatibility shim ----------
+Fragment = getattr(st, "fragment", None)
+if Fragment is None:
+    Fragment = getattr(st, "experimental_fragment", None)
+if Fragment is None:
+    # no-op decorator (regular reruns) if neither exists
+    def Fragment(func=None, *a, **k):
+        if func is None:
+            def deco(f): return f
+            return deco
+        return func
+# -----------------------------------------------
+
 # ==================== FRAGMENT: play/end ====================
-@st.fragment  # Streamlit 1.34+; re-runs are fragment-scoped (no full-page flash)
+@Fragment  # works with st.fragment, st.experimental_fragment, or as a no-op
 def render_game_fragment():
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
@@ -325,7 +334,6 @@ def render_game_fragment():
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Overlays with label: (sx, sy, color, radius, label, on_line)
     overlays: List[Tuple] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
@@ -340,13 +348,11 @@ def render_game_fragment():
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map
         st.markdown(
             make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
-        # Guess UI
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -375,7 +381,7 @@ def render_game_fragment():
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
-                        st.rerun()  # fragment-scoped re-run
+                        st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
         if st.session_state.get("feedback"):
