@@ -1,4 +1,4 @@
-# Tube Guessr — IMG (PNG) + CSS-transform crop (mobile-safe), tight input, no huge bitmaps.
+# Tube Guessr — single-inline-SVG renderer (PNG inside <svg>), mobile-safe, tight input
 
 import base64
 import csv
@@ -19,43 +19,35 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # internal crop box (CSS)
+VIEW_W, VIEW_H = 980, 620   # map viewport (px)
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
+
+# For mobile safety: cap the rasterized PNG’s max side (keeps data-URI & GPU happy)
+MAX_RASTER_SIDE = 2048
 
 # -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
 <style>
-  .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
+  .block-container { max-width: 1100px; padding-top: 2.2rem; padding-bottom: .6rem; }
   .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
 
-  /* Tighten vertical gaps so the input hugs the map */
+  /* remove auto gaps so input hugs the map */
   section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
   section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
 
-  /* Map frame (fixed aspect, responsive width) */
   .map-wrap { width:min(100%, 980px); margin:0 auto; }
-  .map-frame {
+  .map-card {
     width: 100%;
     aspect-ratio: 980 / 620;
-    position: relative; overflow: hidden;
-    border-radius: 14px; background: #0f1115;
+    border-radius: 14px;
+    overflow: hidden;
+    background:#0f1115;
   }
-  .map-img {
-    position: absolute; top: 0; left: 0; display:block;
-    transform-origin: 0 0;         /* critical for translate+scale math */
-    will-change: transform;
-  }
-
-  /* Ring overlay */
-  .ring { position: absolute; border-radius: 50%; pointer-events: none; }
-
-  /* Guess markers */
-  .marker { position: absolute; border-radius: 50%; pointer-events: none; opacity: 0.9; }
 
   .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
@@ -116,7 +108,6 @@ ALIASES = {
     "tottenham crt rd": "Tottenham Court Road",
     "tottenham court rd": "Tottenham Court Road",
 }
-
 def normalize_lines(lines: List[str]) -> List[str]:
     return sorted(set([(l or "").lower().strip() for l in lines if l]))
 
@@ -144,37 +135,40 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SVG → PNG (cached) --------------------
+# -------------------- SVG → PNG data URI (safely downscaled) --------------------
 def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
         return float(w_str), float(h_str)
-    # fallback
     def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
     w_attr = re.search(r'width="([^"]+)"', txt)
     h_attr = re.search(r'height="([^"]+)"', txt)
     return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
 @st.cache_resource(show_spinner=False)
-def load_map_datauri(svg_path: Path) -> Tuple[str, float, float]:
+def load_map_png_datauri(svg_path: Path, max_side: int) -> Tuple[str, float, float, float]:
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
     base_w, base_h = _parse_svg_dims(txt)
 
-    # Prefer PNG data URL (CSP-friendly); fallback to SVG data URL.
+    # scale to keep longest side <= max_side
+    scale = min(1.0, max_side / max(base_w, base_h))
+    out_w = int(base_w * scale)
+    out_h = int(base_h * scale)
+
     try:
         import cairosvg
-        png_bytes = cairosvg.svg2png(bytestring=raw, output_width=int(base_w), output_height=int(base_h))
+        png_bytes = cairosvg.svg2png(bytestring=raw, output_width=out_w, output_height=out_h)
         b64 = base64.b64encode(png_bytes).decode("ascii")
-        return f"data:image/png;base64,{b64}", base_w, base_h
+        return f"data:image/png;base64,{b64}", base_w, base_h, scale
     except Exception:
+        # fallback: inline svg (rarely needed)
         b64 = base64.b64encode(raw).decode("ascii")
-        return f"data:image/svg+xml;base64,{b64}", base_w, base_h
+        return f"data:image/svg+xml;base64,{b64}", base_w, base_h, 1.0
 
 # -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
-    # tx, ty are the *post-scale* pixel offsets that place the center at VIEW_W/2, VIEW_H/2
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -189,48 +183,50 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (IMG + CSS transform overlays) --------------------
-def make_map_html(img_uri: str, baseW: float, baseH: float,
-                  fx_center: float, fy_center: float,
-                  zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    # Compute post-scale tx,ty then convert to pre-scale because we use transform: translate(...) scale(...)
-    tx_scaled, ty_scaled = css_transform(baseW, baseH, fx_center, fy_center, zoom)
-    tx_pre = tx_scaled / zoom
-    ty_pre = ty_scaled / zoom
+# -------------------- SVG RENDERER --------------------
+def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
+                   fx_center: float, fy_center: float,
+                   zoom: float, colorize: bool, ring_color: str,
+                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
 
-    filt = "none" if colorize else "grayscale(1)"
-    r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
+    # Effective dims after raster scaling
+    effW = baseW * png_scale
+    effH = baseH * png_scale
+    effZoom = zoom * png_scale
 
-    overlay_html = ""
+    # Compute translate at the effective scale
+    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    # SVG <g> will do transform with effZoom directly; tx,ty already for VIEW space; OK to reuse
+    # (they’re in viewport pixels)
+
+    # markers
+    overlay_svg = ""
     if overlays:
         parts = []
-        for (sx, sy, color, rr) in overlays:
-            parts.append(
-                f'<div class="marker" style="'
-                f'left:{sx-rr}px; top:{sy-rr}px; width:{2*rr}px; height:{2*rr}px; '
-                f'background:{color}1f; border:2px solid {color};"></div>'
-            )
-        overlay_html = "".join(parts)
+        for sx, sy, color, rr in overlays:
+            parts.append(f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2"/>')
+        overlay_svg = "\n".join(parts)
 
-    ring_left = VIEW_W/2 - r_px
-    ring_top  = VIEW_H/2 - r_px
+    ring_r = max(RING_PX, 0.010 * min(baseW, baseH) * effZoom)
 
-    html = f"""
-<div class="map-wrap">
-  <div class="map-frame" style="max-width:{VIEW_W}px;">
-    <img class="map-img" src="{img_uri}"
-         style="width:{baseW}px; height:{baseH}px;
-                transform: translate({tx_pre}px,{ty_pre}px) scale({zoom});
-                filter:{filt};" />
-    <div class="ring"
-         style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
-                border:{RING_STROKE}px solid {ring_color};"></div>
-    {overlay_html}
-  </div>
-</div>
+    # Optional grayscale for the map group; this works broadly on mobile
+    gray = "none" if colorize else "grayscale(1)"
+
+    svg = f"""
+<svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs></defs>
+  <g transform="translate({tx:.3f},{ty:.3f}) scale({effZoom:.5f})" style="filter:{gray}">
+    <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
+  </g>
+
+  <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{ring_r:.1f}"
+          fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"
+          style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+
+  {overlay_svg}
+</svg>
 """
-    return textwrap.dedent(html).strip()
+    return textwrap.dedent(svg).strip()
 
 # -------------------- SUGGEST/RESOLVE --------------------
 def alias_name(q: str) -> str:
@@ -254,8 +250,7 @@ def overlap_lines(a: Station, b: Station) -> List[str]:
 
 def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
     q = (q or "").strip().lower()
-    if not q:
-        return []
+    if not q: return []
     matches = [n for n in names if n.lower().startswith(q)]
     return sorted(matches)[:limit]
 
@@ -305,7 +300,7 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-IMG_URI, SVG_W, SVG_H = load_map_datauri(SVG_PATH)
+IMG_URI, BASE_W, BASE_H, PNG_SCALE = load_map_png_datauri(SVG_PATH, MAX_RASTER_SIDE)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
@@ -338,29 +333,28 @@ elif st.session_state.phase in ("play","end"):
 
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
 
-    # Colorize if last guess shares a line
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
         if last and same_line(last, answer): colorize = True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Overlays for previous guesses
     overlays: List[Tuple[float,float,str,float]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
-        if not st_obj or st_obj.key == answer.key:
-            continue
-        sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
+        if not st_obj or st_obj.key == answer.key: continue
+        sx, sy = project_to_screen(BASE_W, BASE_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Map + input (tight stack, no gap)
+    # Map (inline SVG) + input immediately below (no spacing)
+    st.markdown('<div class="map-wrap"><div class="map-card">', unsafe_allow_html=True)
     st.markdown(
-        make_map_html(IMG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+        render_map_svg(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
         unsafe_allow_html=True
     )
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
