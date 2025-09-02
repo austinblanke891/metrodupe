@@ -1,6 +1,4 @@
-# Tube Guessr — stable map via components.html (iframe sandbox),
-# IMG base (mobile-safe grayscale) + SVG overlay, zero map->input gap,
-# spaced suggestion buttons, custom result cards
+# Tube Guessr — responsive map (centered crop), sandboxed component, IMG base + SVG overlay
 
 import base64
 import csv
@@ -38,7 +36,7 @@ DB_PATH  = BASE_DIR / "stations_db.csv"
 STATIC_SVG_URL = "/static/tube_map_clean.svg"
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620
+VIEW_W, VIEW_H = 980, 620        # logical viewport used for transforms
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -47,20 +45,16 @@ MAX_GUESSES = 6
 # -------------------- STYLES --------------------
 GLOBAL_CSS = """
 <style>
-  /* More top padding so the title never gets clipped by the app header */
   .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
   @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove Streamlit default vertical gaps */
   section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
   section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
   section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 
-  /* Radios */
   div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
 
-  /* Buttons */
   .stButton>button {
     min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
     background: #2563eb; color: #fff; border: none;
@@ -69,17 +63,14 @@ GLOBAL_CSS = """
   .play-center { display:flex; justify-content:center; }
   .play-center .stButton>button { min-width: 220px; }
 
-  /* Map & guess: flush stacking */
   .map-wrap { margin: 0 auto 0 auto !important; }
   .guess-wrap { margin: 0 !important; padding: 0 !important; }
 
-  /* Guess input flush under map */
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
   .stTextInput>div>div>input {
     text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
   }
 
-  /* Suggestion list spacing & subtle separation */
   .sugg-list { margin-top: 8px; }
   .sugg-list div.element-container { margin-bottom: 12px !important; }
   .sugg-list .stButton>button {
@@ -91,7 +82,6 @@ GLOBAL_CSS = """
 
   .post-input { margin-top: 8px; font-size: .95rem; }
 
-  /* Custom result cards */
   .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
   .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
   .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
@@ -223,10 +213,16 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP RENDER (IMG + SVG overlay) --------------------
+# -------------------- MAP (responsive, centered) --------------------
 def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
                     tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                     overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    """
+    Responsive iframe content:
+      - A fixed-size "inner" canvas (VIEW_W x VIEW_H) that holds IMG + SVG overlay
+      - The entire inner is scaled uniformly to the outer width (keeps crop centered)
+      - Parent iframe is auto-resized via postMessage for zero extra spacing
+    """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
 
@@ -242,10 +238,20 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
+  :root {{ --scale: 1; }}
   html,body {{ margin:0; padding:0; background:transparent; }}
-  .wrap {{
-    position:relative; width:{VIEW_W}px; height:{VIEW_H}px;
-    margin:0 auto; border-radius:14px; overflow:hidden; background:#0f1115;
+  .outer {{
+    width: 100%;
+    position: relative;
+    /* aspect ratio placeholder so the parent can measure before we scale */
+    padding-top: { (VIEW_H / VIEW_W) * 100:.6f}%;
+  }}
+  .stage {{
+    position: absolute; left: 50%; top: 50%;
+    width: {VIEW_W}px; height: {VIEW_H}px;
+    transform: translate(-50%, -50%) scale(var(--scale));
+    transform-origin: 0 0;
+    border-radius: 14px; overflow: hidden; background:#0f1115;
   }}
   img.map {{
     position:absolute; left:0; top:0; width:{baseW}px; height:{baseH}px;
@@ -260,14 +266,35 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <img class="map" src="{svg_uri}" alt="map">
-    <svg class="overlay" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
-      <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-              stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
-      {overlay_svg}
-    </svg>
+  <div id="outer" class="outer">
+    <div id="stage" class="stage">
+      <img class="map" src="{svg_uri}" alt="map"/>
+      <svg class="overlay" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
+        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+                stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
+        {overlay_svg}
+      </svg>
+    </div>
   </div>
+<script>
+(function() {{
+  const OUTER_RATIO = {VIEW_H / VIEW_W:.10f};
+  const VIEW_W = {VIEW_W};
+  function resize() {{
+    const outer = document.getElementById('outer');
+    const stage = document.getElementById('stage');
+    const w = outer.clientWidth;
+    const s = w / VIEW_W;
+    document.documentElement.style.setProperty('--scale', s);
+    // Real height after scaling:
+    const h = w * OUTER_RATIO;
+    // Tell Streamlit to resize the iframe to fit
+    window.parent.postMessage({{ type: 'streamlit:setFrameHeight', height: h }}, '*');
+  }}
+  window.addEventListener('load', resize);
+  window.addEventListener('resize', resize);
+}})();
+</script>
 </body></html>"""
 
 # -------------------- CARDS --------------------
@@ -335,9 +362,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # === FIX: pin iframe width to VIEW_W so it matches the internal canvas ===
+        # Responsive, centered, sandboxed map (parent height auto-adjusts)
         srcdoc = make_map_srcdoc(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
+        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
