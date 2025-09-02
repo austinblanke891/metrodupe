@@ -1,4 +1,4 @@
-# Tube Guessr — stable overlay (SVG rings + SVG labels)
+# Tube Guessr — stable overlay (SVG rings + SVG labels) — no-gap input
 import base64
 import csv
 import datetime as dt
@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
-
-import streamlit.components.v1 as components
 
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
@@ -218,8 +216,9 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                 )
         ring_and_label_svg = "\n".join(parts)
 
+    # IMPORTANT: #map-wrap id lets us collapse spacing via CSS below
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto; position:relative;">
+    <div id="map-wrap" class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto; position:relative;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
@@ -255,35 +254,22 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-st.markdown(
-    """
-    <style>
-        /* shrink the default space under Streamlit components iframes */
-        div[data-testid="stIframe"] { margin-bottom: 6px !important; }
-
-        /* keep the text input snug to what’s above */
-        .stTextInput { margin-top: 6px !important; margin-bottom: 6px !important; }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# Global CSS
+# Global CSS — crush spacing between map & input
 st.markdown(
     """
     <style>
       .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
-      .stTextInput { margin-top: 4px !important; margin-bottom: 4px !important; }
-      .stTextInput>div>div>input {
-        text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
-      }
+      /* Pull the text input tight under the map markdown block */
+      div[data-testid="stMarkdown"]:has(#map-wrap) { margin-bottom: 6px !important; }
+      div[data-testid="stMarkdown"]:has(#map-wrap) + div[data-testid="stTextInput"] { margin-top: 6px !important; }
+
+      .stTextInput>div>div>input { text-align: center; height: 44px; line-height: 44px; font-size: 1rem; }
       .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 8px; }
       .post-input { margin-top: 6px; }
       .play-center { display:flex; justify-content:center; }
-      .play-center .stButton>button {
-        min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
-      }
+      .play-center .stButton>button { min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -370,37 +356,15 @@ elif st.session_state.phase in ("play","end"):
             continue
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            # amber if same line, red otherwise (hex only)
             color_hex = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             rings_and_labels.append((sx, sy, color_hex, 34.0, st_obj.name))
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        html_content = make_map_html(
-            SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels
+        st.markdown(
+            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels),
+            unsafe_allow_html=True,
         )
-
-        components.html(f"""
-        <!doctype html>
-        <html>
-            <head><meta charset="utf-8" /></head>
-            <body style="margin:0">{html_content}
-            <script>
-              function sendHeight(){{
-                const h = document.body.scrollHeight;
-                window.parent.postMessage({{ isStreamlitMessage:true, type:'streamlit:height', height:h }}, '*');
-              }}
-              // Resize when content or fonts settle
-              new ResizeObserver(sendHeight).observe(document.body);
-              window.addEventListener('load', sendHeight);
-              setTimeout(sendHeight, 50);
-              setTimeout(sendHeight, 200);
-            </script>
-            </body>
-        </html>
-        """, height=0, scrolling=False)
-
-
 
         if st.session_state.phase == "play":
             q_now = st.text_input(
