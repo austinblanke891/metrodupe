@@ -1,5 +1,5 @@
-# Tube Guessr — classic centered crop restored
-# IMG base (CSS grayscale for mobile) + SVG overlay, iframe sandbox (no DOM crash)
+# Tube Guessr — classic centered crop + reliable mobile greyscale
+# Inline SVG (feColorMatrix) inside sandboxed iframe; guess bar flush under map.
 
 import base64
 import csv
@@ -30,11 +30,8 @@ except AttributeError:
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
-DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
-
-# Optional static path (enable in .streamlit/config.toml: enableStaticServing = true)
-STATIC_SVG_URL = "/static/tube_map_clean.svg"
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank/label-free tube map
+DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-filled via calibration
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -147,64 +144,35 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SUGGEST/RESOLVE --------------------
-def alias_name(q: str) -> str:
-    return ALIASES.get(norm(q), q)
-
-def resolve_guess(q: str, by_key: Dict[str, Station]) -> Optional[Station]:
-    q = alias_name(q)
-    nq = norm(q)
-    if not nq: return None
-    if nq in by_key: return by_key[nq]
-    for s in by_key.values():
-        if norm(s.name) == nq or norm(clean_display(s.name)) == nq:
-            return s
-    return None
-
-def same_line(a: Station, b: Station) -> bool:
-    return bool(set(a.lines) & set(b.lines))
-
-def overlap_lines(a: Station, b: Station) -> List[str]:
-    return sorted(list(set(a.lines) & set(b.lines)))
-
-def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
-    q = (q or "").strip().lower()
-    if not q:
-        return []
-    matches = [n for n in names if n.lower().startswith(q)]
-    return sorted(matches)[:limit]
-
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
-def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
+def load_svg_inline(svg_path: Path) -> Tuple[str, float, float]:
     """
-    Returns (svg_uri, base_w, base_h, is_static).
-    Prefers static URL (/static/...) if present; else falls back to data URI.
+    Returns (inner_svg_markup_without_outer_svg_tag, base_w, base_h).
+    We embed this *inline* in our own SVG to ensure filters work on iOS.
     """
-    static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
-    if static_fs.exists():
-        raw = static_fs.read_bytes()
-        txt = raw.decode("utf-8", errors="ignore")
-        base_w, base_h = _infer_svg_dimensions(txt)
-        return STATIC_SVG_URL, base_w, base_h, True
-
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
-    raw = svg_path.read_bytes()
-    txt = raw.decode("utf-8", errors="ignore")
-    base_w, base_h = _infer_svg_dimensions(txt)
-    b64 = base64.b64encode(raw).decode("ascii")
-    return f"data:image/svg+xml;base64,{b64}", base_w, base_h, False
+    raw = svg_path.read_text(encoding="utf-8", errors="ignore")
 
-def _infer_svg_dimensions(txt: str) -> Tuple[float, float]:
-    m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
+    # Infer base width/height
+    m = re.search(r'viewBox="([\d.\s\-]+)"', raw)
     if m:
         _, _, w_str, h_str = m.group(1).split()
-        return float(w_str), float(h_str)
-    def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
-    w_attr = re.search(r'width="([^"]+)"', txt)
-    h_attr = re.search(r'height="([^"]+)"', txt)
-    return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
+        base_w = float(w_str); base_h = float(h_str)
+    else:
+        def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
+        w_attr = re.search(r'width="([^"]+)"', raw)
+        h_attr = re.search(r'height="([^"]+)"', raw)
+        base_w = f(w_attr.group(1) if w_attr else None)
+        base_h = f(h_attr.group(1) if h_attr else None)
+
+    # Strip XML declaration and outer <svg ...> ... </svg>, keep the inner content
+    inner = re.sub(r'^\s*<\?xml[^>]*>\s*', '', raw, flags=re.S)
+    inner = re.sub(r'^\s*<!DOCTYPE[^>]*>\s*', '', inner, flags=re.S)
+    inner = re.sub(r'^\s*<svg[^>]*>\s*', '', inner, flags=re.S)
+    inner = re.sub(r'</svg>\s*$', '', inner, flags=re.S)
+    return inner, base_w, base_h
 
 # -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -218,16 +186,11 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (classic fixed canvas) --------------------
-def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
-                    tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
-                    overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """
-    Fixed 980x620 inner canvas (like original), no JS, no responsiveness.
-    Base map is <img> with CSS grayscale (mobile-safe). Overlay is SVG for ring/markers.
-    """
+# -------------------- MAP (inline SVG with filter) --------------------
+def make_map_srcdoc_inline(inner_svg: str, baseW: float, baseH: float,
+                           tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
+                           overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-    css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
 
     overlay_svg = ""
     if overlays:
@@ -237,39 +200,45 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
             for (sx, sy, color, rr) in overlays
         )
 
+    filter_attr = '' if colorize else 'filter="url(#gray)"'
+
+    # NOTE: we nest the **content** of the map SVG inside our SVG and apply the filter to that group.
+    # This works reliably on iOS because the vector content is inside the same filter context.
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html,body {{ margin:0; padding:0; background:transparent; }}
-  .stage {{
-    width:{VIEW_W}px; height:{VIEW_H}px;
-    border-radius:14px; overflow:hidden; background:#0f1115;
-  }}
-  img.map {{
-    position:absolute; left:0; top:0; width:{baseW}px; height:{baseH}px;
-    transform: translate({tx}px, {ty}px) scale({zoom});
-    transform-origin: 0 0; {css_gray}
-    display:block; pointer-events:none;
-  }}
-  svg.overlay {{
-    position:absolute; left:0; top:0; width:{VIEW_W}px; height:{VIEW_H}px;
-    display:block; pointer-events:none;
-  }}
-  .wrap {{ position:relative; width:{VIEW_W}px; height:{VIEW_H}px; }}
+  .stage {{ width:{VIEW_W}px; height:{VIEW_H}px; border-radius:14px; overflow:hidden; background:#0f1115; }}
 </style>
 </head>
 <body>
-  <div class="stage">
-    <div class="wrap">
-      <img class="map" src="{svg_uri}" alt="map"/>
-      <svg class="overlay" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
-        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-                stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
-        {overlay_svg}
+  <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="{VIEW_W}" height="{VIEW_H}">
+    <defs>
+      <filter id="gray">
+        <feColorMatrix type="matrix"
+          values="0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0.2126 0.7152 0.0722 0 0
+                  0      0      0      1 0"/>
+      </filter>
+    </defs>
+
+    <!-- Map content, positioned by your tx/ty/zoom, then tinted by filter when needed -->
+    <g transform="translate({tx},{ty}) scale({zoom})" {filter_attr}>
+      <!-- nested viewport to hold the original map dimensions -->
+      <svg width="{baseW}" height="{baseH}" viewBox="0 0 {baseW} {baseH}">
+        {inner_svg}
       </svg>
-    </div>
-  </div>
+    </g>
+
+    <!-- Center ring -->
+    <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+            stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
+
+    <!-- Wrong-guess markers -->
+    {overlay_svg}
+  </svg>
 </body></html>"""
 
 # -------------------- CARDS --------------------
@@ -315,7 +284,7 @@ def centered_play(label, key=None, top_margin_px: int = 0):
 
 # -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
-def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, svg_h):
+def play_fragment(answer: 'Station', stations, by_key, names, inner_svg, svg_w, svg_h):
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], by_key)
@@ -337,11 +306,10 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Stable, classic canvas (exact crop), grayscale via CSS on <img>
-        srcdoc = make_map_srcdoc(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
+        srcdoc = make_map_srcdoc_inline(inner_svg, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
+        # Fixed size (classic crop)
         st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
 
-        # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
         if st.session_state.phase == "play":
             q_now = st.text_input(
@@ -391,6 +359,33 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
             if centered_play("Play again", key="play_again_btn", top_margin_px=16):
                 if start_round(stations, by_key, names): st.rerun()
 
+# -------------------- ORIGINAL HELPERS (kept) --------------------
+def alias_name(q: str) -> str:
+    return ALIASES.get(norm(q), q)
+
+def resolve_guess(q: str, by_key: Dict[str, Station]) -> Optional[Station]:
+    q = alias_name(q)
+    nq = norm(q)
+    if not nq: return None
+    if nq in by_key: return by_key[nq]
+    for s in by_key.values():
+        if norm(s.name) == nq or norm(clean_display(s.name)) == nq:
+            return s
+    return None
+
+def same_line(a: Station, b: Station) -> bool:
+    return bool(set(a.lines) & set(b.lines))
+
+def overlap_lines(a: Station, b: Station) -> List[str]:
+    return sorted(list(set(a.lines) & set(b.lines)))
+
+def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
+    q = (q or "").strip().lower()
+    if not q:
+        return []
+    matches = [n for n in names if n.lower().startswith(q)]
+    return sorted(matches)[:limit]
+
 # -------------------- APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
@@ -405,10 +400,7 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-def _load_svg(svg_path: Path) -> Tuple[str, float, float, bool]:
-    return load_svg_data(svg_path)
-
-SVG_URI, SVG_W, SVG_H, _is_static = _load_svg(SVG_PATH)
+INNER_SVG, SVG_W, SVG_H = load_svg_inline(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
 if st.session_state.phase == "welcome":
@@ -442,7 +434,7 @@ elif st.session_state.phase in ("play","end"):
     with st.container():
         render_mode_picker(title_on_top=True)
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
-    play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_URI, SVG_W, SVG_H)
+    play_fragment(answer, STATIONS, BY_KEY, NAMES, INNER_SVG, SVG_W, SVG_H)
 
 else:
     st.session_state.phase = "welcome"
