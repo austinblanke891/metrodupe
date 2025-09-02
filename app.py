@@ -1,4 +1,4 @@
-# Tube Guessr — IMG (PNG) + CSS crop, mobile greyscale, tight input, no inline <svg>.
+# Tube Guessr — IMG (PNG) + CSS-transform crop (mobile-safe), tight input, no huge bitmaps.
 
 import base64
 import csv
@@ -33,7 +33,7 @@ st.markdown(
   .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
   .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
 
-  /* Tighten layout so the input hugs the map */
+  /* Tighten vertical gaps so the input hugs the map */
   section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
   section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
 
@@ -47,6 +47,7 @@ st.markdown(
   }
   .map-img {
     position: absolute; top: 0; left: 0; display:block;
+    transform-origin: 0 0;         /* critical for translate+scale math */
     will-change: transform;
   }
 
@@ -156,24 +157,24 @@ def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
 @st.cache_resource(show_spinner=False)
-def load_map_png_datauri(svg_path: Path) -> Tuple[str, float, float]:
+def load_map_datauri(svg_path: Path) -> Tuple[str, float, float]:
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
     base_w, base_h = _parse_svg_dims(txt)
 
-    # Rasterize with CairoSVG (PNG)
+    # Prefer PNG data URL (CSP-friendly); fallback to SVG data URL.
     try:
         import cairosvg
         png_bytes = cairosvg.svg2png(bytestring=raw, output_width=int(base_w), output_height=int(base_h))
         b64 = base64.b64encode(png_bytes).decode("ascii")
         return f"data:image/png;base64,{b64}", base_w, base_h
-    except Exception as e:
-        # As a last resort, fall back to data:svg (may be blocked on some CSPs).
+    except Exception:
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
 # -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
+    # tx, ty are the *post-scale* pixel offsets that place the center at VIEW_W/2, VIEW_H/2
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
     ty = VIEW_H / 2 - cy * zoom
@@ -188,14 +189,16 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (PNG IMG + CSS overlays) --------------------
+# -------------------- MAP (IMG + CSS transform overlays) --------------------
 def make_map_html(img_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
-    img_w = baseW * zoom
-    img_h = baseH * zoom
+    # Compute post-scale tx,ty then convert to pre-scale because we use transform: translate(...) scale(...)
+    tx_scaled, ty_scaled = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    tx_pre = tx_scaled / zoom
+    ty_pre = ty_scaled / zoom
+
     filt = "none" if colorize else "grayscale(1)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
@@ -217,7 +220,9 @@ def make_map_html(img_uri: str, baseW: float, baseH: float,
 <div class="map-wrap">
   <div class="map-frame" style="max-width:{VIEW_W}px;">
     <img class="map-img" src="{img_uri}"
-         style="left:{tx}px; top:{ty}px; width:{img_w}px; height:{img_h}px; filter:{filt};" />
+         style="width:{baseW}px; height:{baseH}px;
+                transform: translate({tx_pre}px,{ty_pre}px) scale({zoom});
+                filter:{filt};" />
     <div class="ring"
          style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
                 border:{RING_STROKE}px solid {ring_color};"></div>
@@ -300,7 +305,7 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-IMG_URI, SVG_W, SVG_H = load_map_png_datauri(SVG_PATH)  # PNG data URI (or fallback SVG)
+IMG_URI, SVG_W, SVG_H = load_map_datauri(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
