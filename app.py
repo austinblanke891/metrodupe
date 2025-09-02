@@ -1,7 +1,4 @@
-# Tube Guessr — SVG-only (no CairoSVG) — crisp + tight spacing
-# -------------------------------------------------------------
-# Put this file next to:  maps/tube_map_clean.svg  and  stations_db.csv
-
+# Tube Guessr — smoother reruns via fragment + clearer wrong-guess markers with labels
 import base64
 import csv
 import datetime as dt
@@ -10,7 +7,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from html import escape as html_escape
 
 import streamlit as st
 
@@ -21,9 +17,8 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-# “Design” dimensions of the map viewport (we scale this responsively)
 VIEW_W, VIEW_H = 980, 620
-ZOOM        = 3.0          # how far in the crop is
+ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
@@ -115,16 +110,10 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
-    """
-    Return: (data_uri, base_w, base_h)
-    We embed the SVG as a data URL so it stays vector-sharp in the browser.
-    No CairoSVG required.
-    """
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
     raw = svg_path.read_bytes()
     txt = raw.decode("utf-8", errors="ignore")
-    # Try to read the viewBox, fall back to width/height attrs
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
@@ -157,17 +146,15 @@ def project_to_screen(baseW: float, baseH: float,
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, float, str, bool]]] = None) -> str:
+                  overlays: Optional[List[Tuple]] = None) -> str:
     """
-    We embed the SVG (vector, sharp) and draw the visible crop using a <svg> viewbox
-    plus a transform. The guess ring sits *on top* and the guess markers are drawn as
-    semi-transparent circles with labels.
-    overlays: list of (sx, sy, color, radius, label, on_same_line)
+    overlays: list of tuples
+      (sx, sy, color, radius, label, on_line)
+      label/on_line are optional; older 4-tuple still supported.
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
-    # Optional grayscale tint (we keep it consistent across devices)
     gray_filter = """
       <filter id="gray">
         <feColorMatrix type="matrix"
@@ -182,54 +169,52 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     overlay_svg = ""
     if overlays:
         parts = []
-        for (sx, sy, color, rr, label, on_line) in overlays:
-            label = html_escape(label or "")
-            # Keep label inside viewport a bit
-            label_x = max(60, min(VIEW_W - 60, sx))
-            label_y = max(22, sy - (rr + 16))
+        for tup in overlays:
+            sx, sy, color, rr = tup[0], tup[1], tup[2], tup[3]
+            label = tup[4] if len(tup) >= 5 else ""
+            on_line = tup[5] if len(tup) >= 6 else False
 
-            # A stronger visual for same-line (amber) guesses:
-            # - fat outer translucent halo
-            # - solid ring
-            # - small inner dot
-            halo_opacity = "0.28" if on_line else "0.20"
-            ring_w = "6" if on_line else "5"
-            dot_r  = "4.5" if on_line else "4.0"
-            dash   = "6,5" if on_line else "none"   # amber gets a dash to pop
+            # stronger marker: concentric ring + glow-ish fill
+            inner_opacity = "0.28" if on_line else "0.20"
+            stroke_w = "3.5" if on_line else "2.5"
+
+            label_svg = ""
+            if label:
+                padding = 8
+                est_w = int(7.2 * len(label) + 2 * padding)   # very rough width
+                est_h = 22
+                # try to place to the right, unless we are near the right edge
+                box_x = sx + rr + 10
+                if box_x + est_w + 10 > VIEW_W:
+                    box_x = sx - rr - 10 - est_w
+                box_y = sy - est_h / 2
+
+                label_svg = f"""
+                  <g class="label-chip">
+                    <rect x="{box_x:.1f}" y="{box_y:.1f}" rx="6" ry="6" width="{est_w}" height="{est_h}"
+                          fill="rgba(17,24,39,0.86)"/>
+                    <text x="{box_x + padding:.1f}" y="{sy + 6:.1f}"
+                          fill="#fff" font-size="12" font-weight="600"
+                          style="letter-spacing:.2px">{label}</text>
+                  </g>
+                """
 
             parts.append(
-                f"""<g class="guess-marker">
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr*1.25:.1f}"
-                              fill="none"
-                              stroke="{color}" stroke-opacity="{halo_opacity}"
-                              stroke-width="12"
-                              style="filter: drop-shadow(0 0 8px {color});"/>
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                              fill="none"
-                              stroke="{color}" stroke-width="{ring_w}"
-                              {"stroke-dasharray='"+dash+"'" if dash!="none" else ""}
-                              style="filter: drop-shadow(0 0 6px {color});"/>
-                      <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{dot_r}"
-                              fill="{color}" fill-opacity="0.9"
-                              stroke="{color}" stroke-width="1" />
-                      <!-- Label with outline for contrast -->
-                      <text x="{label_x:.1f}" y="{label_y:.1f}"
-                            text-anchor="middle"
-                            font-size="15" font-weight="700"
-                            stroke="#ffffff" stroke-width="3"
-                            paint-order="stroke"
-                            fill="#111111">{label}</text>
-                      <text x="{label_x:.1f}" y="{label_y:.1f}"
-                            text-anchor="middle"
-                            font-size="15" font-weight="700"
-                            fill="#111111">{label}</text>
-                    </g>"""
+                f"""
+                <g class="guess-marker">
+                  <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr+4:.1f}"
+                          fill="none" stroke="{color}" stroke-opacity="0.55" stroke-width="{stroke_w}"/>
+                  <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
+                          fill="{color}" fill-opacity="{inner_opacity}"
+                          stroke="{color}" stroke-width="2"/>
+                  {label_svg}
+                </g>
+                """
             )
         overlay_svg = "\n".join(parts)
 
-    # minimal gap below the map (the outer div controls that)
     return f"""
-    <div class="map-wrap tight-gap" style="max-width:{VIEW_W}px; margin:0 auto 6px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 8px auto;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx},{ty}) scale({zoom})">
@@ -261,29 +246,33 @@ def start_round(stations, by_key, names):
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 
-# Global CSS (no JS; avoids browser errors)
+# Global CSS
 st.markdown(
     """
     <style>
-      .block-container { max-width: 1100px; padding-top: 1.2rem; padding-bottom: 1rem; }
-      .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
+      .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
+      .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
+
       .map-wrap { margin: 0 auto 6px auto !important; }
-      .tight-gap { margin-bottom: 6px !important; }
-      .stTextInput { margin-top: 4px !important; margin-bottom: 4px !important; }
+
+      .stTextInput { margin-top: 2px !important; margin-bottom: 0px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
+
       .sugg-list .stButton>button {
-        min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 8px;
+        min-height: 44px; font-size: 1rem; border-radius: 12px; margin: 5px 0;
       }
-      .post-input { margin-top: 6px; }
+
+      .post-input { margin-top: 8px; }
+
       .play-center { display:flex; justify-content:center; }
       .play-center .stButton>button {
         min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
       }
-      @media (max-width: 640px) {
-        .block-container { padding-top: .8rem; }
-      }
+
+      /* Make labels crisper over the map */
+      .label-chip text { paint-order: stroke; stroke: rgba(0,0,0,0.28); stroke-width: 2px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -304,7 +293,7 @@ if "feedback" not in st.session_state:
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
 
-# Helpers (UI)
+# Helpers
 def render_mode_picker(title_on_top=False):
     if title_on_top:
         st.markdown("### Mode")
@@ -323,35 +312,9 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- WELCOME PAGE --------------------
-if st.session_state.phase == "welcome":
-    st.markdown("# Tube Guessr")
-    st.markdown(
-        """
-        Guess the London Underground station from a zoomed-in crop of the Tube map.
-
-        **How to play**
-        - Start typing a station name in the search box on the game screen, then press Enter.
-        - A list of auto-fill suggestions will appear — click one to submit your guess.
-        - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
-        - You have 6 guesses.
-        """
-    )
-    st.divider()
-    if centered_play("Play"):
-        st.session_state.phase="start"
-        st.rerun()
-
-# -------------------- START (choose mode once here) --------------------
-elif st.session_state.phase == "start":
-    st.markdown("# Tube Guessr")
-    render_mode_picker(title_on_top=True)
-    st.write("")
-    if centered_play("Start Game"):
-        if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
-
-# -------------------- PLAY / END --------------------
-elif st.session_state.phase in ("play","end"):
+# ==================== FRAGMENT: play/end ====================
+@st.fragment  # Streamlit 1.34+; re-runs are fragment-scoped (no full-page flash)
+def render_game_fragment():
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
 
@@ -362,7 +325,8 @@ elif st.session_state.phase in ("play","end"):
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    overlays: List[Tuple[float,float,str,float,str,bool]] = []
+    # Overlays with label: (sx, sy, color, radius, label, on_line)
+    overlays: List[Tuple] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj or st_obj.key == answer.key:
@@ -370,19 +334,19 @@ elif st.session_state.phase in ("play","end"):
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
             on_line = same_line(st_obj, answer)
-            color   = "#f59e0b" if on_line else "#ef4444"
-            radius  = 36.0 if on_line else 28.0
+            color = "#f59e0b" if on_line else "#ef4444"
+            radius = 36.0 if on_line else 28.0
             overlays.append((sx, sy, color, radius, st_obj.name, on_line))
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # MAP
+        # Map
         st.markdown(
             make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
         )
 
-        # GUESS INPUT — directly under the map (tiny gap)
+        # Guess UI
         if st.session_state.phase == "play":
             q_now = st.text_input(
                 "Type to search stations",
@@ -390,7 +354,6 @@ elif st.session_state.phase in ("play","end"):
                 placeholder="Start typing… then press Enter",
                 label_visibility="collapsed",
             )
-            # Suggestions
             sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
             if sugg:
                 st.markdown('<div class="sugg-list">', unsafe_allow_html=True)
@@ -412,17 +375,15 @@ elif st.session_state.phase in ("play","end"):
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
-                        st.rerun()
+                        st.rerun()  # fragment-scoped re-run
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # Feedback + history + counter
         if st.session_state.get("feedback"):
             st.info(st.session_state["feedback"])
         if st.session_state.history:
             st.markdown('<div class="post-input">**Your guesses:** ' + ", ".join(st.session_state.history) + "</div>", unsafe_allow_html=True)
         st.caption(f"Guesses left: {st.session_state.remaining}")
 
-    # END state
     if st.session_state.phase == "end":
         _l, c, _r = st.columns([1,1,1])
         with c:
@@ -432,3 +393,32 @@ elif st.session_state.phase in ("play","end"):
                 st.error(f"Out of guesses. The station was **{answer.name}**.")
             if centered_play("Play again"):
                 if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
+
+# ==================== PAGES ====================
+if st.session_state.phase == "welcome":
+    st.markdown("# Tube Guessr")
+    st.markdown(
+        """
+        Guess the London Underground station from a zoomed-in crop of the Tube map.
+
+        **How to play**
+        - Start typing a station name in the search box on the game screen, then press Enter.
+        - A list of auto-fill suggestions will appear — click one to submit your guess.
+        - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
+        - You have 6 guesses.
+        """
+    )
+    st.divider()
+    if centered_play("Play"):
+        st.session_state.phase="start"
+        st.rerun()
+
+elif st.session_state.phase == "start":
+    st.markdown("# Tube Guessr")
+    render_mode_picker(title_on_top=True)
+    st.write("")
+    if centered_play("Start Game"):
+        if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
+
+elif st.session_state.phase in ("play","end"):
+    render_game_fragment()
