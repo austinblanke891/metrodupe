@@ -1,6 +1,4 @@
-# Tube Guessr — Public (welcome -> start flow; choose mode once on Start)
-# Pixel-accurate inline SVG crop, guesses + feedback, no calibration/diagnostics.
-
+# Tube Guessr — stable overlay (SVG rings) + HTML label chips
 import base64
 import csv
 import datetime as dt
@@ -130,7 +128,7 @@ def load_svg_data(svg_path: Path) -> Tuple[str, float, float]:
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
-# -------------------- GEOMETRY / SVG RENDER --------------------
+# -------------------- GEOMETRY / PROJECTION --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
@@ -146,13 +144,16 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
+# -------------------- RENDER --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
-                  overlays: Optional[List[Tuple[float, float, str, float, Optional[str]]]] = None) -> str:
+                  rings_and_labels: Optional[List[Tuple[float,float,str,float,str]]] = None) -> str:
     """
-    overlays: list of (sx, sy, color, radius_px, label_text)
-              screen-space centers, already projected
+    rings_and_labels: list of (sx, sy, color_hex, radius_px, label_text)
+    - Rings are drawn inside the SVG (strict SVG attributes).
+    - Labels are added as absolutely-positioned HTML chips on top
+      to avoid any fragile SVG text behavior.
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -168,35 +169,50 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
-    overlay_svg = ""
-    if overlays:
-        parts = []
-        for (sx, sy, color, rr, label) in overlays:
-            safe_label = html.escape(str(label)) if label else ""
-            # Two-ring, beefy marker with soft fill to make it obvious
-            parts.append(
+    # Build SVG rings
+    ring_svg = ""
+    label_html = ""
+    if rings_and_labels:
+        rings_parts = []
+        labels_parts = []
+        for sx, sy, color_hex, rr, label in rings_and_labels:
+            safe_label = html.escape(label or "")
+            # SVG-safe: hex color + fill-opacity attribute
+            rings_parts.append(
                 f"""<g class="guess-marker">
                       <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                              fill="{color}" fill-opacity="0.20"
-                              stroke="{color}" stroke-width="3" />
+                              fill="{color_hex}" fill-opacity="0.18"
+                              stroke="{color_hex}" stroke-width="3" />
                       <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{(rr-4):.1f}"
-                              fill="none" stroke="{color}" stroke-width="3" />
-                      {f'''
-                        <g class="label-chip">
-                          <rect x="{sx + rr + 10:.1f}" y="{sy - 11:.1f}" rx="6" ry="6"
-                                width="{int(7.2*len(safe_label)+16)}" height="22"
-                                fill="rgba(17,24,39,0.86)"/>
-                          <text x="{sx + rr + 18:.1f}" y="{sy + 6:.1f}"
-                                fill="#fff" font-size="12" font-weight="600"
-                                style="letter-spacing:.2px">{safe_label}</text>
-                        </g>
-                      ''' if label else ''}
+                              fill="none" stroke="{color_hex}" stroke-width="3" />
                     </g>"""
             )
-        overlay_svg = "\n".join(parts)
+            if safe_label:
+                # HTML chip overlay (position:absolute, relative to container)
+                chip_left = sx + rr + 10
+                chip_top  = sy - 14
+                labels_parts.append(
+                    f"""<div class="chip" style="left:{chip_left:.1f}px; top:{chip_top:.1f}px;">
+                           {safe_label}
+                        </div>"""
+                )
+        ring_svg = "\n".join(rings_parts)
+        label_html = "\n".join(labels_parts)
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
+      <style>
+        .chip {{
+          position:absolute;
+          background:#111827;
+          color:#fff; font-size:12px; font-weight:600;
+          padding:4px 8px; border-radius:8px;
+          letter-spacing:.2px;
+          white-space:nowrap;
+          pointer-events:none;
+          box-shadow:0 2px 6px rgba(0,0,0,.25);
+        }}
+      </style>
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
@@ -205,8 +221,9 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{r_px:.1f}" stroke="{ring_color}"
                 stroke-width="{RING_STROKE}" fill="none"
                 style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
-        {overlay_svg}
+        {ring_svg}
       </svg>
+      {label_html}
     </div>
     """
 
@@ -235,17 +252,12 @@ st.markdown(
       .block-container { max-width: 1100px; padding-top: 1.6rem; padding-bottom: 1rem; }
       .block-container h1:first-of-type { margin: 0 0 .75rem 0; }
 
-      .map-wrap { margin: 0 auto 6px auto !important; }
-
       .stTextInput { margin-top: 4px !important; margin-bottom: 4px !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem;
       }
-
       .stButton>button { min-height: 44px; font-size: 1rem; border-radius: 10px; margin-bottom: 8px; }
-
       .post-input { margin-top: 6px; }
-
       .play-center { display:flex; justify-content:center; }
       .play-center .stButton>button {
         min-width: 220px; border-radius: 9999px; padding: 10px 18px; font-size: 1rem;
@@ -289,7 +301,7 @@ def centered_play(label):
     st.markdown('</div>', unsafe_allow_html=True)
     return clicked
 
-# -------------------- WELCOME PAGE --------------------
+# -------------------- WELCOME --------------------
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
@@ -298,7 +310,7 @@ if st.session_state.phase == "welcome":
 
         **How to play**
         - Start typing a station name in the search box on the game screen, then press Enter.
-        - A list of auto-fill suggestions will appear — click one to submit your guess.
+        - Pick from the suggestions or press Enter to submit.
         - If your guess is wrong but on the correct line, we’ll tell you (map tint turns amber).
         - You have 6 guesses.
         """
@@ -308,7 +320,7 @@ if st.session_state.phase == "welcome":
         st.session_state.phase="start"
         st.rerun()
 
-# -------------------- START (choose mode once here) --------------------
+# -------------------- START --------------------
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
@@ -328,22 +340,22 @@ elif st.session_state.phase in ("play","end"):
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build overlays with labels for wrong guesses
-    overlays: List[Tuple[float,float,str,float,Optional[str]]] = []
+    # Build rings + HTML chips
+    rings_and_labels: List[Tuple[float,float,str,float,str]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
         if not st_obj or st_obj.key == answer.key:
             continue
         sx, sy = project_to_screen(SVG_W, SVG_H, st_obj.fx, st_obj.fy, answer.fx, answer.fy, ZOOM)
         if 0 <= sx <= VIEW_W and 0 <= sy <= VIEW_H:
-            is_same = same_line(st_obj, answer)
-            color = "#f59e0b" if is_same else "#ef4444"  # amber for same line, red otherwise
-            overlays.append((sx, sy, color, 34.0, st_obj.name))  # bigger radius + label
+            # amber if same line, red otherwise (hex only)
+            color_hex = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
+            rings_and_labels.append((sx, sy, color_hex, 34.0, st_obj.name))
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
         st.markdown(
-            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+            make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels),
             unsafe_allow_html=True
         )
 
