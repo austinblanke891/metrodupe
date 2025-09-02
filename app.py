@@ -1,4 +1,4 @@
-# Tube Guessr — stable overlay (SVG rings) + HTML label chips
+# Tube Guessr — stable overlay (SVG rings + SVG labels)
 import base64
 import csv
 import datetime as dt
@@ -151,8 +151,8 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   rings_and_labels: Optional[List[Tuple[float,float,str,float,str]]] = None) -> str:
     """
     rings_and_labels: list of (sx, sy, color_hex, radius_px, label_text)
-    - Rings + label chips are now rendered INSIDE the SVG (rect + text),
-      so they scale together with the map and never drift.
+    - Rings + label chips are rendered INSIDE the SVG (rect + text),
+      so they scale with the map and never drift.
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -214,7 +214,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                                 fill="#ffffff">{safe_label}</text>
                         </g>"""
                 )
-
         ring_and_label_svg = "\n".join(parts)
 
     return f"""
@@ -233,33 +232,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         <!-- Guess markers + labels -->
         {ring_and_label_svg}
       </svg>
-    </div>
-    """
-
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
-      <style>
-        .chip {{
-          position:absolute;
-          background:#111827;
-          color:#fff; font-size:12px; font-weight:600;
-          padding:4px 8px; border-radius:8px;
-          letter-spacing:.2px;
-          white-space:nowrap;
-          pointer-events:none;
-          box-shadow:0 2px 6px rgba(0,0,0,.25);
-        }}
-      </style>
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
-        <defs>{gray_filter}</defs>
-        <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
-          <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
-        </g>
-        <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{r_px:.1f}" stroke="{ring_color}"
-                stroke-width="{RING_STROKE}" fill="none"
-                style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
-        {ring_svg}
-      </svg>
-      {label_html}
     </div>
     """
 
@@ -376,7 +348,7 @@ elif st.session_state.phase in ("play","end"):
         if last and same_line(last, answer): colorize=True
     ring = "#22c55e" if (st.session_state.phase=="end" and st.session_state.won) else ("#eab308" if colorize else "#22c55e")
 
-    # Build rings + HTML chips
+    # Build rings + labels (all in SVG)
     rings_and_labels: List[Tuple[float,float,str,float,str]] = []
     for gname in st.session_state.history:
         st_obj = resolve_guess(gname, BY_KEY)
