@@ -1,4 +1,4 @@
-# Tube Guessr — single-inline-SVG renderer (PNG inside <svg>), mobile-safe, tight input
+# Tube Guessr — inline <svg> map with separate overlay, mobile-safe, tight spacing
 
 import base64
 import csv
@@ -21,33 +21,43 @@ DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calib
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620   # map viewport (px)
 ZOOM        = 3.0
-RING_PX     = 28             # viewport pixels (constant so it always shows)
+RING_PX     = 28             # viewport px (overlay), constant so it always shows
 RING_STROKE = 6
 MAX_GUESSES = 6
-
-# For mobile safety: cap the rasterized PNG’s max side (keeps data-URI & GPU happy)
-MAX_RASTER_SIDE = 2048
+MAX_RASTER_SIDE = 2048       # phone/GPU-safe
 
 # -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
 <style>
-  .block-container { max-width: 1100px; padding-top: 2.2rem; padding-bottom: .6rem; }
-  .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
+  /* Compact page */
+  .block-container { max-width: 1100px; padding-top: 1.0rem; padding-bottom: .4rem; }
+  .block-container h1:first-of-type { margin: 0 0 .4rem 0; }
 
-  /* remove auto gaps so input hugs the map */
-  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
-  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+  /* Kill default element vertical gaps so map/input hug each other */
+  section.main div.element-container { margin: 0 !important; padding: 0 !important; }
+  section.main [data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+  .stMarkdown p { margin: 0 !important; }
 
   .map-wrap { width:min(100%, 980px); margin:0 auto; }
   .map-card {
     width: 100%;
     aspect-ratio: 980 / 620;
+    position: relative;
     border-radius: 14px;
     overflow: hidden;
     background:#0f1115;
   }
+
+  /* base map svg fills card */
+  .map-svg, .overlay-svg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+  }
+  /* overlay always on top */
+  .overlay-svg { pointer-events: none; }
 
   .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
   .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
@@ -135,7 +145,7 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- SVG → PNG data URI (safely downscaled) --------------------
+# -------------------- SVG → PNG data URI --------------------
 def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
@@ -181,43 +191,40 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- SVG RENDERER --------------------
-def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
-                   fx_center: float, fy_center: float,
-                   zoom: float, colorize: bool, ring_color: str,
-                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-
-    eff_zoom = zoom * png_scale  # <— actual scale applied in <svg>
-    # IMPORTANT: compute tx,ty using eff_zoom (fixes huge blank band at top)
+# -------------------- RENDERERS --------------------
+def render_map_only(img_uri: str, baseW: float, baseH: float, png_scale: float,
+                    fx_center: float, fy_center: float, zoom: float,
+                    colorize: bool) -> str:
+    eff_zoom = zoom * png_scale
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, eff_zoom)
-
     effW = baseW * png_scale
     effH = baseH * png_scale
+    gray = "none" if colorize else "grayscale(1)"
 
-    overlay_svg = ""
+    return f"""
+<svg class="map-svg" viewBox="0 0 {VIEW_W} {VIEW_H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="filter:{gray}">
+    <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
+  </g>
+</svg>
+""".strip()
+
+def render_overlay(ring_color: str,
+                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    # Ring is in viewport coords, always at center
+    ring = f'<circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{float(RING_PX):.1f}" fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"/>'
+    other = ""
     if overlays:
         parts = []
         for sx, sy, color, rr in overlays:
             parts.append(f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2"/>')
-        overlay_svg = "\n".join(parts)
-
-    ring_r = float(RING_PX)  # constant viewport size so it always shows
-
-    gray = "none" if colorize else "grayscale(1)"
-
-    svg = f"""
-<svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-  <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="filter:{gray}">
-    <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
-  </g>
-
-  <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{ring_r:.1f}"
-          fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"/>
-
-  {overlay_svg}
+        other = "\n".join(parts)
+    return f"""
+<svg class="overlay-svg" viewBox="0 0 {VIEW_W} {VIEW_H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  {ring}
+  {other}
 </svg>
-"""
-    return textwrap.dedent(svg).strip()
+""".strip()
 
 # -------------------- SUGGEST/RESOLVE --------------------
 def alias_name(q: str) -> str:
@@ -237,7 +244,7 @@ def same_line(a: Station, b: Station) -> bool:
     return bool(set(a.lines) & set(b.lines))
 
 def overlap_lines(a: Station, b: Station) -> List[str]:
-    return sorted(list(set(a.lines) & set(a.lines)))
+    return sorted(list(set(a.lines) & set(b.lines)))
 
 def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
     q = (q or "").strip().lower()
@@ -315,7 +322,7 @@ Guess the London Underground station from a zoomed-in crop of the Tube map.
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
     render_mode_picker(title_on_top=True)
-    if centered_play("Start Game", key="start_btn", top_margin_px=10):
+    if centered_play("Start Game", key="start_btn", top_margin_px=6):
         if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
 elif st.session_state.phase in ("play","end"):
@@ -339,12 +346,10 @@ elif st.session_state.phase in ("play","end"):
             color = "#f59e0b" if same_line(st_obj, answer) else "#ef4444"
             overlays.append((sx, sy, color, 30.0))
 
-    # Map (inline SVG) + input immediately below (no spacing)
+    # Map + overlay stacked, then input immediately below (no extra spacing)
     st.markdown('<div class="map-wrap"><div class="map-card">', unsafe_allow_html=True)
-    st.markdown(
-        render_map_svg(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
-        unsafe_allow_html=True
-    )
+    st.markdown(render_map_only(IMG_URI, BASE_W, BASE_H, PNG_SCALE, answer.fx, answer.fy, ZOOM, colorize), unsafe_allow_html=True)
+    st.markdown(render_overlay(ring, overlays), unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
