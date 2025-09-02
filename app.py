@@ -151,9 +151,8 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   rings_and_labels: Optional[List[Tuple[float,float,str,float,str]]] = None) -> str:
     """
     rings_and_labels: list of (sx, sy, color_hex, radius_px, label_text)
-    - Rings are drawn inside the SVG (strict SVG attributes).
-    - Labels are added as absolutely-positioned HTML chips on top
-      to avoid any fragile SVG text behavior.
+    - Rings + label chips are now rendered INSIDE the SVG (rect + text),
+      so they scale together with the map and never drift.
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
@@ -169,17 +168,16 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     """
     image_style = 'filter:url(#gray);' if not colorize else ''
 
-    # Build SVG rings
-    ring_svg = ""
-    label_html = ""
+    # Build SVG rings + SVG label chips
+    ring_and_label_svg = ""
     if rings_and_labels:
-        rings_parts = []
-        labels_parts = []
+        parts = []
         for sx, sy, color_hex, rr, label in rings_and_labels:
             safe_label = html.escape(label or "")
-            # SVG-safe: hex color + fill-opacity attribute
-            rings_parts.append(
-                f"""<g class="guess-marker">
+
+            # --- ring: two strokes + soft fill
+            parts.append(
+                f"""<g class="guess-marker" pointer-events="none">
                       <circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
                               fill="{color_hex}" fill-opacity="0.18"
                               stroke="{color_hex}" stroke-width="3" />
@@ -187,19 +185,57 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                               fill="none" stroke="{color_hex}" stroke-width="3" />
                     </g>"""
             )
+
+            # --- label chip (rect + text) INSIDE SVG ---
             if safe_label:
-                # HTML chip overlay (position:absolute, relative to container)
-                chip_left = sx + rr + 10
-                chip_top  = sy - 14
-                labels_parts.append(
-                    f"""<div class="chip" style="left:{chip_left:.1f}px; top:{chip_top:.1f}px;">
-                           {safe_label}
-                        </div>"""
+                # rough text width estimate (scales with SVG)
+                char_w = 7.2
+                pad_x = 8.0
+                chip_h = 20.0
+                chip_w = pad_x*2 + char_w * len(safe_label)
+
+                # default position: to the right of the ring
+                lx = sx + rr + 10.0
+                ly = sy - chip_h/2
+
+                # keep inside the viewbox
+                if lx + chip_w > VIEW_W - 6:
+                    lx = max(6.0, sx - rr - 10.0 - chip_w)
+                lx = min(max(lx, 6.0), VIEW_W - chip_w - 6.0)
+                ly = min(max(ly, 6.0), VIEW_H - chip_h - 6.0)
+
+                parts.append(
+                    f"""<g class="chip" pointer-events="none">
+                          <rect x="{lx:.1f}" y="{ly:.1f}" rx="8" ry="8"
+                                width="{chip_w:.1f}" height="{chip_h:.1f}"
+                                fill="#111827" fill-opacity="0.95" />
+                          <text x="{(lx+pad_x):.1f}" y="{(ly+chip_h-6):.1f}"
+                                font-size="12" font-weight="600"
+                                fill="#ffffff">{safe_label}</text>
+                        </g>"""
                 )
-        ring_svg = "\n".join(rings_parts)
-        label_html = "\n".join(labels_parts)
+
+        ring_and_label_svg = "\n".join(parts)
 
     return f"""
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
+      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
+        <defs>{gray_filter}</defs>
+        <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
+          <image href="{svg_uri}" width="{baseW}" height="{baseH}" style="{image_style}"/>
+        </g>
+
+        <!-- Center aim ring -->
+        <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{r_px:.1f}" stroke="{ring_color}"
+                stroke-width="{RING_STROKE}" fill="none"
+                style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+
+        <!-- Guess markers + labels -->
+        {ring_and_label_svg}
+      </svg>
+    </div>
+    """
+
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
       <style>
         .chip {{
