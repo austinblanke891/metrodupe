@@ -1,4 +1,4 @@
-# Tube Guessr — SAFE build (no inline <svg>): CSS-cropped img, mobile greyscale, zero-gap input.
+# Tube Guessr — IMG (PNG) + CSS crop, mobile greyscale, tight input, no inline <svg>.
 
 import base64
 import csv
@@ -19,7 +19,7 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # internal view for crop box
+VIEW_W, VIEW_H = 980, 620        # internal crop box (CSS)
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -41,7 +41,7 @@ st.markdown(
   .map-wrap { width:min(100%, 980px); margin:0 auto; }
   .map-frame {
     width: 100%;
-    aspect-ratio: 980 / 620;          /* preserves exact crop ratio on every device */
+    aspect-ratio: 980 / 620;
     position: relative; overflow: hidden;
     border-radius: 14px; background: #0f1115;
   }
@@ -143,25 +143,34 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- ASSETS --------------------
-@st.cache_resource(show_spinner=False)
-def load_svg_datauri(svg_path: Path) -> Tuple[str, float, float]:
-    if not svg_path.exists():
-        raise FileNotFoundError(f"SVG not found: {svg_path}")
-    raw = svg_path.read_bytes()
-    txt = raw.decode("utf-8", errors="ignore")
+# -------------------- SVG → PNG (cached) --------------------
+def _parse_svg_dims(txt: str) -> Tuple[float, float]:
     m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
-        base_w = float(w_str); base_h = float(h_str)
-    else:
-        def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
-        w_attr = re.search(r'width="([^"]+)"', txt)
-        h_attr = re.search(r'height="([^"]+)"', txt)
-        base_w = f(w_attr.group(1) if w_attr else None)
-        base_h = f(h_attr.group(1) if h_attr else None)
-    b64 = base64.b64encode(raw).decode("ascii")
-    return f"data:image/svg+xml;base64,{b64}", base_w, base_h
+        return float(w_str), float(h_str)
+    # fallback
+    def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
+    w_attr = re.search(r'width="([^"]+)"', txt)
+    h_attr = re.search(r'height="([^"]+)"', txt)
+    return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
+
+@st.cache_resource(show_spinner=False)
+def load_map_png_datauri(svg_path: Path) -> Tuple[str, float, float]:
+    raw = svg_path.read_bytes()
+    txt = raw.decode("utf-8", errors="ignore")
+    base_w, base_h = _parse_svg_dims(txt)
+
+    # Rasterize with CairoSVG (PNG)
+    try:
+        import cairosvg
+        png_bytes = cairosvg.svg2png(bytestring=raw, output_width=int(base_w), output_height=int(base_h))
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        return f"data:image/png;base64,{b64}", base_w, base_h
+    except Exception as e:
+        # As a last resort, fall back to data:svg (may be blocked on some CSPs).
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
 # -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -179,16 +188,11 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (IMG + CSS overlays; no <svg>) --------------------
-def make_map_html(svg_uri: str, baseW: float, baseH: float,
+# -------------------- MAP (PNG IMG + CSS overlays) --------------------
+def make_map_html(img_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
-    """
-    Renders the large SVG as a single <img>, cropped via absolute positioning.
-    Greyscale via CSS filter (works on iOS). Overlays are absolutely positioned DIVs.
-    IMPORTANT: No leading indentation (avoid Markdown code block).
-    """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
     img_w = baseW * zoom
     img_h = baseH * zoom
@@ -199,7 +203,6 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     if overlays:
         parts = []
         for (sx, sy, color, rr) in overlays:
-            # 8-digit hex for alpha (works broadly in modern browsers)
             parts.append(
                 f'<div class="marker" style="'
                 f'left:{sx-rr}px; top:{sy-rr}px; width:{2*rr}px; height:{2*rr}px; '
@@ -213,7 +216,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     html = f"""
 <div class="map-wrap">
   <div class="map-frame" style="max-width:{VIEW_W}px;">
-    <img class="map-img" src="{svg_uri}"
+    <img class="map-img" src="{img_uri}"
          style="left:{tx}px; top:{ty}px; width:{img_w}px; height:{img_h}px; filter:{filt};" />
     <div class="ring"
          style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
@@ -297,7 +300,7 @@ if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
 # -------------------- LOAD ASSETS --------------------
-SVG_URI, SVG_W, SVG_H = load_svg_datauri(SVG_PATH)
+IMG_URI, SVG_W, SVG_H = load_map_png_datauri(SVG_PATH)  # PNG data URI (or fallback SVG)
 STATIONS, BY_KEY, NAMES = load_db()
 
 # -------------------- APP --------------------
@@ -350,7 +353,7 @@ elif st.session_state.phase in ("play","end"):
 
     # Map + input (tight stack, no gap)
     st.markdown(
-        make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+        make_map_html(IMG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
         unsafe_allow_html=True
     )
 
