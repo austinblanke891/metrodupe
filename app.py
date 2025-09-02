@@ -5,6 +5,7 @@ import csv
 import datetime as dt
 import random
 import re
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -28,67 +29,58 @@ MAX_GUESSES = 6
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
-    <style>
-      .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
-      .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
+<style>
+  .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
+  .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
 
-      /* Tighten layout so the input hugs the map */
-      section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
-      section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+  /* Tighten layout so the input hugs the map */
+  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
 
-      /* Map frame (fixed aspect, responsive width) */
-      .map-wrap { width:min(100%, 980px); margin:0 auto; }
-      .map-frame {
-        width: 100%;
-        aspect-ratio: 980 / 620;              /* keeps exact crop ratio on every device */
-        position: relative; overflow: hidden;
-        border-radius: 14px; background: #0f1115;
-      }
-      .map-img {
-        position: absolute; top: 0; left: 0;   /* we'll set left/top via inline styles */
-        will-change: transform;                /* GPU smoothness on mobile */
-      }
+  /* Map frame (fixed aspect, responsive width) */
+  .map-wrap { width:min(100%, 980px); margin:0 auto; }
+  .map-frame {
+    width: 100%;
+    aspect-ratio: 980 / 620;          /* preserves exact crop ratio on every device */
+    position: relative; overflow: hidden;
+    border-radius: 14px; background: #0f1115;
+  }
+  .map-img {
+    position: absolute; top: 0; left: 0; display:block;
+    will-change: transform;
+  }
 
-      /* Ring overlay */
-      .ring {
-        position: absolute;
-        border-radius: 50%;
-        pointer-events: none;
-      }
+  /* Ring overlay */
+  .ring { position: absolute; border-radius: 50%; pointer-events: none; }
 
-      /* Guess markers */
-      .marker {
-        position: absolute;
-        border-radius: 50%;
-        pointer-events: none;
-        opacity: 0.9;
-      }
+  /* Guess markers */
+  .marker { position: absolute; border-radius: 50%; pointer-events: none; opacity: 0.9; }
 
-      .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
-      .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
-      .stTextInput>div>div>input {
-        text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
-      }
+  .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
+  .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
+  .stTextInput>div>div>input {
+    text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
+  }
 
-      .sugg-list { margin-top: 8px; }
-      .sugg-list div.element-container { margin-bottom: 10px !important; }
-      .sugg-list .stButton>button {
-        width: 100%; border-radius: 14px; padding: 12px 16px;
-        box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
-      }
+  .sugg-list { margin-top: 8px; }
+  .sugg-list div.element-container { margin-bottom: 10px !important; }
+  .sugg-list .stButton>button {
+    width: 100%; border-radius: 14px; padding: 12px 16px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
+  }
 
-      .post-input { margin-top: 8px; font-size: .95rem; }
-      .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
-      .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
-      .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
+  .post-input { margin-top: 8px; font-size: .95rem; }
+  .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
+  .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
+  .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
 
-      .play-center { display:flex; justify-content:center; }
-      .play-center .stButton>button {
-        min-width: 220px; min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
-        background: #2563eb; color: #fff; border: none;
-      }
-      .play-center .stButton>button:hover { background: #1d4ed8; }
-    </style>
+  .play-center { display:flex; justify-content:center; }
+  .play-center .stButton>button {
+    min-width: 220px; min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
+    background: #2563eb; color: #fff; border: none;
+  }
+  .play-center .stButton>button:hover { background: #1d4ed8; }
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -193,14 +185,13 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Renders the big SVG as a single <img>, cropped via absolute positioning.
+    Renders the large SVG as a single <img>, cropped via absolute positioning.
     Greyscale via CSS filter (works on iOS). Overlays are absolutely positioned DIVs.
+    IMPORTANT: No leading indentation (avoid Markdown code block).
     """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
-    # Convert internal (980x620) tx/ty to CSS px in the same box.
     img_w = baseW * zoom
     img_h = baseH * zoom
-    # filter: grayscale(1) unless colorize
     filt = "none" if colorize else "grayscale(1)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
@@ -208,32 +199,30 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
     if overlays:
         parts = []
         for (sx, sy, color, rr) in overlays:
+            # 8-digit hex for alpha (works broadly in modern browsers)
             parts.append(
-                f"""<div class="marker" style="
-                        left:{sx-rr}px; top:{sy-rr}px; width:{2*rr}px; height:{2*rr}px;
-                        background:{color}1f; border:2px solid {color};
-                    "></div>"""
+                f'<div class="marker" style="'
+                f'left:{sx-rr}px; top:{sy-rr}px; width:{2*rr}px; height:{2*rr}px; '
+                f'background:{color}1f; border:2px solid {color};"></div>'
             )
-        overlay_html = "\n".join(parts)
+        overlay_html = "".join(parts)
 
-    # ring centered in the crop box
     ring_left = VIEW_W/2 - r_px
     ring_top  = VIEW_H/2 - r_px
 
-    return f"""
-    <div class="map-wrap">
-      <div class="map-frame" style="max-width:{VIEW_W}px;">
-        <img class="map-img" src="{svg_uri}"
-             style="left:{tx}px; top:{ty}px; width:{img_w}px; height:{img_h}px; filter:{filt};" />
-
-        <div class="ring"
-             style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
-                    border:{RING_STROKE}px solid {ring_color};"></div>
-
-        {overlay_html}
-      </div>
-    </div>
-    """
+    html = f"""
+<div class="map-wrap">
+  <div class="map-frame" style="max-width:{VIEW_W}px;">
+    <img class="map-img" src="{svg_uri}"
+         style="left:{tx}px; top:{ty}px; width:{img_w}px; height:{img_h}px; filter:{filt};" />
+    <div class="ring"
+         style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
+                border:{RING_STROKE}px solid {ring_color};"></div>
+    {overlay_html}
+  </div>
+</div>
+"""
+    return textwrap.dedent(html).strip()
 
 # -------------------- SUGGEST/RESOLVE --------------------
 def alias_name(q: str) -> str:
@@ -316,13 +305,13 @@ if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
     st.markdown(
         """
-        Guess the London Underground station from a zoomed-in crop of the Tube map.
+Guess the London Underground station from a zoomed-in crop of the Tube map.
 
-        **How to play**
-        - Start typing a station name in the search box on the game screen, then press Enter.
-        - A list of auto-fill suggestions will appear — click one to submit your guess.
-        - If your guess is wrong but on the correct line, we’ll tell you.
-        - You have 6 guesses.
+**How to play**
+- Start typing a station name in the search box on the game screen, then press Enter.
+- A list of auto-fill suggestions will appear — click one to submit your guess.
+- If your guess is wrong but on the correct line, we’ll tell you.
+- You have 6 guesses.
         """
     )
     st.divider()
