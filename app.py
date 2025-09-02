@@ -21,7 +21,7 @@ DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calib
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620   # map viewport (px)
 ZOOM        = 3.0
-RING_PX     = 28
+RING_PX     = 28             # viewport pixels (constant so it always shows)
 RING_STROKE = 6
 MAX_GUESSES = 6
 
@@ -152,7 +152,6 @@ def load_map_png_datauri(svg_path: Path, max_side: int) -> Tuple[str, float, flo
     txt = raw.decode("utf-8", errors="ignore")
     base_w, base_h = _parse_svg_dims(txt)
 
-    # scale to keep longest side <= max_side
     scale = min(1.0, max_side / max(base_w, base_h))
     out_w = int(base_w * scale)
     out_h = int(base_h * scale)
@@ -163,7 +162,6 @@ def load_map_png_datauri(svg_path: Path, max_side: int) -> Tuple[str, float, flo
         b64 = base64.b64encode(png_bytes).decode("ascii")
         return f"data:image/png;base64,{b64}", base_w, base_h, scale
     except Exception:
-        # fallback: inline svg (rarely needed)
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:image/svg+xml;base64,{b64}", base_w, base_h, 1.0
 
@@ -189,17 +187,13 @@ def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
                    zoom: float, colorize: bool, ring_color: str,
                    overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
 
-    # Effective dims after raster scaling
+    eff_zoom = zoom * png_scale  # <— actual scale applied in <svg>
+    # IMPORTANT: compute tx,ty using eff_zoom (fixes huge blank band at top)
+    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, eff_zoom)
+
     effW = baseW * png_scale
     effH = baseH * png_scale
-    effZoom = zoom * png_scale
 
-    # Compute translate at the effective scale
-    tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
-    # SVG <g> will do transform with effZoom directly; tx,ty already for VIEW space; OK to reuse
-    # (they’re in viewport pixels)
-
-    # markers
     overlay_svg = ""
     if overlays:
         parts = []
@@ -207,21 +201,18 @@ def render_map_svg(img_uri: str, baseW: float, baseH: float, png_scale: float,
             parts.append(f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2"/>')
         overlay_svg = "\n".join(parts)
 
-    ring_r = max(RING_PX, 0.010 * min(baseW, baseH) * effZoom)
+    ring_r = float(RING_PX)  # constant viewport size so it always shows
 
-    # Optional grayscale for the map group; this works broadly on mobile
     gray = "none" if colorize else "grayscale(1)"
 
     svg = f"""
 <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-  <defs></defs>
-  <g transform="translate({tx:.3f},{ty:.3f}) scale({effZoom:.5f})" style="filter:{gray}">
+  <g transform="translate({tx:.3f},{ty:.3f}) scale({eff_zoom:.5f})" style="filter:{gray}">
     <image href="{img_uri}" width="{effW:.1f}" height="{effH:.1f}" />
   </g>
 
   <circle cx="{VIEW_W/2:.1f}" cy="{VIEW_H/2:.1f}" r="{ring_r:.1f}"
-          fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"
-          style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
+          fill="none" stroke="{ring_color}" stroke-width="{RING_STROKE}"/>
 
   {overlay_svg}
 </svg>
@@ -246,7 +237,7 @@ def same_line(a: Station, b: Station) -> bool:
     return bool(set(a.lines) & set(b.lines))
 
 def overlap_lines(a: Station, b: Station) -> List[str]:
-    return sorted(list(set(a.lines) & set(b.lines)))
+    return sorted(list(set(a.lines) & set(a.lines)))
 
 def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
     q = (q or "").strip().lower()
