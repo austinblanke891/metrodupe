@@ -1,4 +1,4 @@
-# Tube Guessr — mobile-safe grayscale (SVG feColorMatrix + CSS fallback),
+# Tube Guessr — DOM <img> base (mobile-safe grayscale), SVG overlay for ring/markers,
 # zero map->input gap, wider suggestion spacing, custom result cards
 
 import base64
@@ -50,7 +50,7 @@ GLOBAL_CSS = """
   @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
   .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  /* Remove Streamlit card borders & default vertical gaps */
+  /* Remove Streamlit default vertical gaps */
   section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
   section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
   section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
@@ -94,17 +94,6 @@ GLOBAL_CSS = """
   .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
   .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
 </style>
-"""
-
-# Mobile-safe grayscale SVG filter (feColorMatrix)
-GRAY_FILTER_DEF = """
-<filter id="gray">
-  <feColorMatrix type="matrix"
-    values="0.2126 0.7152 0.0722 0 0
-            0.2126 0.7152 0.0722 0 0
-            0.2126 0.7152 0.0722 0 0
-            0      0      0      1 0"/>
-</filter>
 """
 
 # -------------------- DATA --------------------
@@ -224,7 +213,7 @@ def _infer_svg_dimensions(txt: str) -> Tuple[float, float]:
     h_attr = re.search(r'height="([^"]+)"', txt)
     return f(w_attr.group(1) if w_attr else None), f(h_attr.group(1) if h_attr else None)
 
-# -------------------- GEOMETRY / SVG RENDER --------------------
+# -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
     cx, cy = fx_center * baseW, fy_center * baseH
     tx = VIEW_W / 2 - cx * zoom
@@ -236,42 +225,46 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
+# -------------------- MAP RENDER (IMG + SVG overlay) --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Returns HTML (no iframe). To be robust on mobile:
-    - Add <defs><filter id="gray"> feColorMatrix ... </filter></defs>
-    - When grayscale is required, set BOTH SVG filter attr AND CSS filter on the <image>.
-      Many mobile browsers honor at least one of the two.
+    Render base map as <img> (CSS grayscale -> mobile-safe) and ring/markers as a
+    separate SVG overlay. No <defs>, no iframe, no DOM errors.
     """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-
-    # Fallbacks: use both CSS filter and SVG filter for maximum cross-browser support
     css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
-    svg_gray  = "" if colorize else 'filter="url(#gray)"'
 
     overlay_svg = ""
     if overlays:
         overlay_svg = "\n".join(
-            f'<g class="guess-marker"><circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
-            f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" /></g>'
+            f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}" '
+            f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" />'
             for (sx, sy, color, rr) in overlays
         )
 
+    # Container -> IMG (translated/scaled), then overlay SVG at full viewport size
     return f"""
     <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto;">
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#0f1115;">
-        <defs>{GRAY_FILTER_DEF}</defs>
-        <g transform="translate({tx},{ty}) scale({zoom})">
-          <image href="{svg_uri}" width="{baseW}" height="{baseH}" {svg_gray} style="{css_gray}"/>
-        </g>
-        <!-- Ring & overlays are outside the grayscale, so they remain colored -->
-        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}" stroke="{ring_color}"
-                stroke-width="{RING_STROKE}" fill="none"
-                style="filter: drop-shadow(0 0 0 rgba(0,0,0,0.45));"/>
-        {overlay_svg}
-      </svg>
+      <div style="
+        position:relative; width:{VIEW_W}px; height:{VIEW_H}px;
+        margin:0 auto; border-radius:14px; overflow:hidden; background:#0f1115;">
+        <img src="{svg_uri}" alt="map"
+             style="
+               position:absolute; left:0; top:0;
+               width:{baseW}px; height:{baseH}px;
+               transform: translate({tx}px, {ty}px) scale({zoom});
+               transform-origin: 0 0;
+               {css_gray}
+             " />
+        <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" height="100%"
+             style="position:absolute; left:0; top:0;">
+          <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
+                  stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none" />
+          {overlay_svg}
+        </svg>
+      </div>
     </div>
     """
 
@@ -342,7 +335,7 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Map (no iframe, natural height)
+        # Map (IMG base + SVG overlay)
         st.markdown(
             make_map_html(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays),
             unsafe_allow_html=True
@@ -395,7 +388,6 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
                 st.markdown(success_card("Correct!"), unsafe_allow_html=True)
             else:
                 st.markdown(error_card(f"Out of guesses. The station was <b>{answer.name}</b>."), unsafe_allow_html=True)
-            # Lower the Play again button a bit
             if centered_play("Play again", key="play_again_btn", top_margin_px=16):
                 if start_round(stations, by_key, names): st.rerun()
 
