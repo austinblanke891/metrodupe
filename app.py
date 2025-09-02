@@ -1,5 +1,6 @@
 # Tube Guessr — classic centered crop + reliable mobile greyscale
-# Inline SVG (feColorMatrix) inside sandboxed iframe; guess bar flush under map.
+# Map drawn inside a sandboxed <svg> using <image> + feColorMatrix (works on iOS)
+# Keeps the exact 980x620 crop and puts the guess bar flush under the map.
 
 import base64
 import csv
@@ -30,8 +31,8 @@ except AttributeError:
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # blank/label-free tube map
-DB_PATH  = BASE_DIR / "stations_db.csv"           # pre-filled via calibration
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
+DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
 VIEW_W, VIEW_H = 980, 620
@@ -40,51 +41,60 @@ RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
-# -------------------- STYLES --------------------
-GLOBAL_CSS = """
-<style>
-  .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
-  @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
-  .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
+# -------------------- GLOBAL CSS --------------------
+st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
+st.markdown(
+    """
+    <style>
+      .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
+      @media (max-width: 900px){ .block-container { padding-top: 3.2rem; } }
+      .block-container h1:first-of-type { margin: 0 0 .5rem 0; }
 
-  section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
-  section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
-  section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+      section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
+      section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+      section.main div[data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
 
-  div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
+      /* Radios */
+      div[data-baseweb="radio"] label { font-size: 1rem; margin-right: 1rem; }
 
-  .stButton>button {
-    min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
-    background: #2563eb; color: #fff; border: none;
-  }
-  .stButton>button:hover { background: #1d4ed8; }
-  .play-center { display:flex; justify-content:center; }
-  .play-center .stButton>button { min-width: 220px; }
+      /* Buttons */
+      .stButton>button {
+        min-height: 44px; font-size: 1rem; border-radius: 9999px; padding: 10px 18px;
+        background: #2563eb; color: #fff; border: none;
+      }
+      .stButton>button:hover { background: #1d4ed8; }
+      .play-center { display:flex; justify-content:center; }
+      .play-center .stButton>button { min-width: 220px; }
 
-  .map-wrap { margin: 0 auto 0 auto !important; }
-  .guess-wrap { margin: 0 !important; padding: 0 !important; }
+      /* Map + input: zero gap */
+      .map-wrap { margin: 0 auto 0 auto !important; }
+      .guess-wrap { margin: 0 !important; padding: 0 !important; }
 
-  .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
-  .stTextInput>div>div>input {
-    text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
-  }
+      .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
+      .stTextInput>div>div>input {
+        text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
+      }
 
-  .sugg-list { margin-top: 8px; }
-  .sugg-list div.element-container { margin-bottom: 12px !important; }
-  .sugg-list .stButton>button {
-    width: 100%;
-    border-radius: 14px;
-    box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
-    padding: 12px 16px;
-  }
+      /* Suggestions with a touch more separation */
+      .sugg-list { margin-top: 8px; }
+      .sugg-list div.element-container { margin-bottom: 12px !important; }
+      .sugg-list .stButton>button {
+        width: 100%;
+        border-radius: 14px;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset;
+        padding: 12px 16px;
+      }
 
-  .post-input { margin-top: 8px; font-size: .95rem; }
+      .post-input { margin-top: 8px; font-size: .95rem; }
 
-  .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
-  .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
-  .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
-</style>
-"""
+      /* Result cards */
+      .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
+      .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
+      .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # -------------------- DATA --------------------
 @dataclass
@@ -144,35 +154,25 @@ def load_db() -> Tuple[List[Station], Dict[str, Station], List[str]]:
     by_key = {s.key: s for s in stations}
     return stations, by_key, sorted([s.name for s in stations])
 
-# -------------------- ASSETS --------------------
+# -------------------- ASSETS (b64 data-uri for <image>) --------------------
 @st.cache_resource(show_spinner=False)
-def load_svg_inline(svg_path: Path) -> Tuple[str, float, float]:
-    """
-    Returns (inner_svg_markup_without_outer_svg_tag, base_w, base_h).
-    We embed this *inline* in our own SVG to ensure filters work on iOS.
-    """
+def load_svg_datauri(svg_path: Path) -> Tuple[str, float, float]:
     if not svg_path.exists():
         raise FileNotFoundError(f"SVG not found: {svg_path}")
-    raw = svg_path.read_text(encoding="utf-8", errors="ignore")
-
-    # Infer base width/height
-    m = re.search(r'viewBox="([\d.\s\-]+)"', raw)
+    raw = svg_path.read_bytes()
+    txt = raw.decode("utf-8", errors="ignore")
+    m = re.search(r'viewBox="([\d.\s\-]+)"', txt)
     if m:
         _, _, w_str, h_str = m.group(1).split()
         base_w = float(w_str); base_h = float(h_str)
     else:
         def f(v): return float(re.sub(r"[^0-9.]", "", v)) if v else 3200.0
-        w_attr = re.search(r'width="([^"]+)"', raw)
-        h_attr = re.search(r'height="([^"]+)"', raw)
+        w_attr = re.search(r'width="([^"]+)"', txt)
+        h_attr = re.search(r'height="([^"]+)"', txt)
         base_w = f(w_attr.group(1) if w_attr else None)
         base_h = f(h_attr.group(1) if h_attr else None)
-
-    # Strip XML declaration and outer <svg ...> ... </svg>, keep the inner content
-    inner = re.sub(r'^\s*<\?xml[^>]*>\s*', '', raw, flags=re.S)
-    inner = re.sub(r'^\s*<!DOCTYPE[^>]*>\s*', '', inner, flags=re.S)
-    inner = re.sub(r'^\s*<svg[^>]*>\s*', '', inner, flags=re.S)
-    inner = re.sub(r'</svg>\s*$', '', inner, flags=re.S)
-    return inner, base_w, base_h
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}", base_w, base_h
 
 # -------------------- GEOMETRY --------------------
 def css_transform(baseW: float, baseH: float, fx_center: float, fy_center: float, zoom: float) -> Tuple[float, float]:
@@ -186,12 +186,11 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (inline SVG with filter) --------------------
-def make_map_srcdoc_inline(inner_svg: str, baseW: float, baseH: float,
-                           tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
-                           overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+# -------------------- MAP RENDER (SVG <image> + feColorMatrix) --------------------
+def make_map_srcdoc(svg_data_uri: str, baseW: float, baseH: float,
+                    tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
+                    overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
-
     overlay_svg = ""
     if overlays:
         overlay_svg = "\n".join(
@@ -199,17 +198,14 @@ def make_map_srcdoc_inline(inner_svg: str, baseW: float, baseH: float,
             f'fill="{color}" fill-opacity="0.28" stroke="{color}" stroke-width="2" />'
             for (sx, sy, color, rr) in overlays
         )
-
+    # We draw everything inside ONE SVG. The map comes from <image> (data URI),
+    # and we tint it gray with feColorMatrix (works on iOS).
     filter_attr = '' if colorize else 'filter="url(#gray)"'
-
-    # NOTE: we nest the **content** of the map SVG inside our SVG and apply the filter to that group.
-    # This works reliably on iOS because the vector content is inside the same filter context.
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html,body {{ margin:0; padding:0; background:transparent; }}
-  .stage {{ width:{VIEW_W}px; height:{VIEW_H}px; border-radius:14px; overflow:hidden; background:#0f1115; }}
 </style>
 </head>
 <body>
@@ -224,12 +220,9 @@ def make_map_srcdoc_inline(inner_svg: str, baseW: float, baseH: float,
       </filter>
     </defs>
 
-    <!-- Map content, positioned by your tx/ty/zoom, then tinted by filter when needed -->
-    <g transform="translate({tx},{ty}) scale({zoom})" {filter_attr}>
-      <!-- nested viewport to hold the original map dimensions -->
-      <svg width="{baseW}" height="{baseH}" viewBox="0 0 {baseW} {baseH}">
-        {inner_svg}
-      </svg>
+    <!-- Map image positioned by translate+scale, then grey-filtered -->
+    <g transform="translate({tx},{ty}) scale({zoom})">
+      <image href="{svg_data_uri}" width="{baseW}" height="{baseH}" {filter_attr}/>
     </g>
 
     <!-- Center ring -->
@@ -284,7 +277,7 @@ def centered_play(label, key=None, top_margin_px: int = 0):
 
 # -------------------- FRAGMENT: PLAY AREA --------------------
 @st_fragment
-def play_fragment(answer: 'Station', stations, by_key, names, inner_svg, svg_w, svg_h):
+def play_fragment(answer: 'Station', stations, by_key, names, svg_data_uri, svg_w, svg_h):
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], by_key)
@@ -306,10 +299,11 @@ def play_fragment(answer: 'Station', stations, by_key, names, inner_svg, svg_w, 
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        srcdoc = make_map_srcdoc_inline(inner_svg, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        # Fixed size (classic crop)
+        # Classic fixed canvas: exact same crop/center as your original
+        srcdoc = make_map_srcdoc(svg_data_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
         st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
 
+        # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
         if st.session_state.phase == "play":
             q_now = st.text_input(
@@ -353,13 +347,13 @@ def play_fragment(answer: 'Station', stations, by_key, names, inner_svg, svg_w, 
         _l, c, _r = st.columns([1,1,1])
         with c:
             if st.session_state.won:
-                st.markdown(success_card("Correct!"), unsafe_allow_html=True)
+                st.markdown('<div class="card success">Correct!</div>', unsafe_allow_html=True)
             else:
-                st.markdown(error_card(f"Out of guesses. The station was <b>{answer.name}</b>."), unsafe_allow_html=True)
+                st.markdown(f'<div class="card error">Out of guesses. The station was <b>{answer.name}</b>.</div>', unsafe_allow_html=True)
             if centered_play("Play again", key="play_again_btn", top_margin_px=16):
                 if start_round(stations, by_key, names): st.rerun()
 
-# -------------------- ORIGINAL HELPERS (kept) --------------------
+# -------------------- ORIGINAL HELPERS --------------------
 def alias_name(q: str) -> str:
     return ALIASES.get(norm(q), q)
 
@@ -386,10 +380,7 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
     matches = [n for n in names if n.lower().startswith(q)]
     return sorted(matches)[:limit]
 
-# -------------------- APP --------------------
-st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
-st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-
+# -------------------- SESSION & APP --------------------
 if "phase" not in st.session_state:
     st.session_state.phase="welcome"
     st.session_state.mode="daily"
@@ -400,8 +391,27 @@ if "phase" not in st.session_state:
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
 
-INNER_SVG, SVG_W, SVG_H = load_svg_inline(SVG_PATH)
+SVG_DATA_URI, SVG_W, SVG_H = load_svg_datauri(SVG_PATH)
 STATIONS, BY_KEY, NAMES = load_db()
+
+def render_mode_picker(title_on_top=False):
+    if title_on_top:
+        st.markdown("### Mode")
+    choice = st.radio(
+        label="Mode",
+        options=["daily", "practice"],
+        index=(0 if st.session_state.mode == "daily" else 1),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="mode_radio"
+    )
+    st.session_state.mode = choice
+
+def centered_play(label, key=None, top_margin_px: int = 0):
+    st.markdown(f'<div class="play-center" style="margin-top:{top_margin_px}px;">', unsafe_allow_html=True)
+    clicked = st.button(label, type="primary", key=key)
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
 
 if st.session_state.phase == "welcome":
     st.markdown("# Tube Guessr")
@@ -418,8 +428,7 @@ if st.session_state.phase == "welcome":
     )
     st.divider()
     if centered_play("Play", key="welcome_play_btn"):
-        st.session_state.phase="start"
-        st.rerun()
+        st.session_state.phase="start"; st.rerun()
 
 elif st.session_state.phase == "start":
     st.markdown("# Tube Guessr")
@@ -431,10 +440,9 @@ elif st.session_state.phase == "start":
 
 elif st.session_state.phase in ("play","end"):
     st.markdown("# Tube Guessr")
-    with st.container():
-        render_mode_picker(title_on_top=True)
+    with st.container(): render_mode_picker(title_on_top=True)
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
-    play_fragment(answer, STATIONS, BY_KEY, NAMES, INNER_SVG, SVG_W, SVG_H)
+    play_fragment(answer, STATIONS, BY_KEY, NAMES, SVG_DATA_URI, SVG_W, SVG_H)
 
 else:
     st.session_state.phase = "welcome"
