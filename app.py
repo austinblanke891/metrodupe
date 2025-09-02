@@ -219,7 +219,7 @@ def make_map_html(svg_uri: str, baseW: float, baseH: float,
         ring_and_label_svg = "\n".join(parts)
 
     return f"""
-    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 6px auto; position:relative;">
+    <div class="map-wrap" style="width:min(100%, {VIEW_W}px); margin:0 auto 0 auto; position:relative;">
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" width="100%" style="display:block;border-radius:14px;background:#f6f7f8;">
         <defs>{gray_filter}</defs>
         <g transform="translate({tx:.1f},{ty:.1f}) scale({zoom})">
@@ -254,6 +254,18 @@ def start_round(stations, by_key, names):
 
 # -------------------- STREAMLIT APP --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
+
+st.markdown(
+    """
+    <style>
+        /* shrink the default space under Streamlit components iframes */
+        div[data-testid="stIframe"] { margin-bottom: 6px !important; }
+
+        /* keep the text input snug to what’s above */
+        .stTextInput { margin-top: 6px !important; margin-bottom: 6px !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
 
 # Global CSS
 st.markdown(
