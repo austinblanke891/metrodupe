@@ -1,8 +1,4 @@
-# Tube Guessr — SAFE MODE
-# - No st.fragment / components / 3rd-party widgets (avoids front-end TypeError)
-# - Inline SVG with filter="url(#gray)" (mobile Safari-friendly greyscale)
-# - Guess bar sits directly under the map (no extra spacing)
-# - Same crop logic: 980x620 view, translate+scale around answer station
+# Tube Guessr — SAFE build (no inline <svg>): CSS-cropped img, mobile greyscale, zero-gap input.
 
 import base64
 import csv
@@ -22,13 +18,13 @@ SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
 DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # internal viewBox used for crop
+VIEW_W, VIEW_H = 980, 620        # internal view for crop box
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
 MAX_GUESSES = 6
 
-# -------------------- PAGE + GLOBAL CSS --------------------
+# -------------------- PAGE + CSS --------------------
 st.set_page_config(page_title="Tube Guessr", page_icon=None, layout="wide")
 st.markdown(
     """
@@ -36,22 +32,44 @@ st.markdown(
       .block-container { max-width: 1100px; padding-top: 2.6rem; padding-bottom: .6rem; }
       .block-container h1:first-of-type { margin: 0 0 .6rem 0; }
 
-      /* Tighten layout: remove default element gaps so input hugs the map */
+      /* Tighten layout so the input hugs the map */
       section.main div.element-container { margin-bottom: 0 !important; padding-bottom: 0 !important; }
       section.main div[data-testid="stVerticalBlock"] { row-gap: 0 !important; }
 
-      /* Map + input wrappers */
-      .map-wrap   { width:min(100%, 980px); margin:0 auto 0 auto !important; }
-      .map-wrap svg { display:block; width:100%; height:auto; border-radius:14px; background:#0f1115; }
-      .guess-wrap { width:min(100%, 980px); margin:0 auto; }
+      /* Map frame (fixed aspect, responsive width) */
+      .map-wrap { width:min(100%, 980px); margin:0 auto; }
+      .map-frame {
+        width: 100%;
+        aspect-ratio: 980 / 620;              /* keeps exact crop ratio on every device */
+        position: relative; overflow: hidden;
+        border-radius: 14px; background: #0f1115;
+      }
+      .map-img {
+        position: absolute; top: 0; left: 0;   /* we'll set left/top via inline styles */
+        will-change: transform;                /* GPU smoothness on mobile */
+      }
 
-      /* Input */
+      /* Ring overlay */
+      .ring {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+      }
+
+      /* Guess markers */
+      .marker {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+        opacity: 0.9;
+      }
+
+      .guess-wrap { width:min(100%, 980px); margin: 0 auto; }
       .stTextInput { margin-top: 0 !important; margin-bottom: 0 !important; }
       .stTextInput>div>div>input {
         text-align: center; height: 44px; line-height: 44px; font-size: 1rem; border-radius: 10px;
       }
 
-      /* Suggestions (slightly separated) */
       .sugg-list { margin-top: 8px; }
       .sugg-list div.element-container { margin-bottom: 10px !important; }
       .sugg-list .stButton>button {
@@ -60,7 +78,6 @@ st.markdown(
       }
 
       .post-input { margin-top: 8px; font-size: .95rem; }
-
       .card { border-radius: 12px; padding: 14px 16px; margin-top: 8px; }
       .card.success { background:#0f2e20; border:1px solid #14532d; color:#dcfce7; }
       .card.error   { background:#2a1313; border:1px solid #7f1d1d; color:#fee2e2; }
@@ -170,50 +187,51 @@ def project_to_screen(baseW: float, baseH: float,
     y = fy_target * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (inline SVG; no components) --------------------
+# -------------------- MAP (IMG + CSS overlays; no <svg>) --------------------
 def make_map_html(svg_uri: str, baseW: float, baseH: float,
                   fx_center: float, fy_center: float,
                   zoom: float, colorize: bool, ring_color: str,
                   overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
+    """
+    Renders the big SVG as a single <img>, cropped via absolute positioning.
+    Greyscale via CSS filter (works on iOS). Overlays are absolutely positioned DIVs.
+    """
     tx, ty = css_transform(baseW, baseH, fx_center, fy_center, zoom)
+    # Convert internal (980x620) tx/ty to CSS px in the same box.
+    img_w = baseW * zoom
+    img_h = baseH * zoom
+    # filter: grayscale(1) unless colorize
+    filt = "none" if colorize else "grayscale(1)"
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
 
-    gray_filter = """
-      <filter id="gray">
-        <feColorMatrix type="matrix"
-          values="0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0.2126 0.7152 0.0722 0 0
-                  0      0      0      1 0"/>
-      </filter>
-    """
-    filter_attr = '' if colorize else 'filter="url(#gray)"'
-
-    overlay_svg = ""
+    overlay_html = ""
     if overlays:
         parts = []
         for (sx, sy, color, rr) in overlays:
             parts.append(
-                f"""<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{rr:.1f}"
-                       fill="{color}" fill-opacity="0.28"
-                       stroke="{color}" stroke-width="2" />"""
+                f"""<div class="marker" style="
+                        left:{sx-rr}px; top:{sy-rr}px; width:{2*rr}px; height:{2*rr}px;
+                        background:{color}1f; border:2px solid {color};
+                    "></div>"""
             )
-        overlay_svg = "\n".join(parts)
+        overlay_html = "\n".join(parts)
+
+    # ring centered in the crop box
+    ring_left = VIEW_W/2 - r_px
+    ring_top  = VIEW_H/2 - r_px
 
     return f"""
     <div class="map-wrap">
-      <svg viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="xMidYMid meet">
-        <defs>{gray_filter}</defs>
+      <div class="map-frame" style="max-width:{VIEW_W}px;">
+        <img class="map-img" src="{svg_uri}"
+             style="left:{tx}px; top:{ty}px; width:{img_w}px; height:{img_h}px; filter:{filt};" />
 
-        <g transform="translate({tx},{ty}) scale({zoom})">
-          <image href="{svg_uri}" width="{baseW}" height="{baseH}" {filter_attr} />
-        </g>
+        <div class="ring"
+             style="left:{ring_left}px; top:{ring_top}px; width:{2*r_px}px; height:{2*r_px}px;
+                    border:{RING_STROKE}px solid {ring_color};"></div>
 
-        <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
-                stroke="{ring_color}" stroke-width="{RING_STROKE}" fill="none"/>
-
-        {overlay_svg}
-      </svg>
+        {overlay_html}
+      </div>
     </div>
     """
 
@@ -323,7 +341,7 @@ elif st.session_state.phase in ("play","end"):
 
     answer: Station = st.session_state.answer or (STATIONS[0] if STATIONS else Station("?", 0.5, 0.5, []))
 
-    # Colorization hint: turn map colored if last guess shares a line
+    # Colorize if last guess shares a line
     colorize = False
     if st.session_state.history:
         last = resolve_guess(st.session_state.history[-1], BY_KEY)
@@ -342,8 +360,10 @@ elif st.session_state.phase in ("play","end"):
             overlays.append((sx, sy, color, 30.0))
 
     # Map + input (tight stack, no gap)
-    st.markdown(make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
-                unsafe_allow_html=True)
+    st.markdown(
+        make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, overlays),
+        unsafe_allow_html=True
+    )
 
     st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
     if st.session_state.phase == "play":
@@ -391,7 +411,7 @@ elif st.session_state.phase in ("play","end"):
             st.markdown(f'<div class="card error">Out of guesses. The station was <b>{answer.name}</b>.</div>', unsafe_allow_html=True)
         st.markdown('<div class="play-center">', unsafe_allow_html=True)
         again = st.button("Play again", key="play_again_btn")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         if again:
             if start_round(STATIONS, BY_KEY, NAMES): st.rerun()
 
