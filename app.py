@@ -1,4 +1,5 @@
-# Tube Guessr — responsive map (centered crop), sandboxed component, IMG base + SVG overlay
+# Tube Guessr — classic centered crop restored
+# IMG base (CSS grayscale for mobile) + SVG overlay, iframe sandbox (no DOM crash)
 
 import base64
 import csv
@@ -29,14 +30,14 @@ except AttributeError:
 # -------------------- PATHS --------------------
 BASE_DIR = Path(__file__).parent.resolve()
 ASSETS_DIR = BASE_DIR / "maps"
-SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"
-DB_PATH  = BASE_DIR / "stations_db.csv"
+SVG_PATH = ASSETS_DIR / "tube_map_clean.svg"      # Blank SVG (no labels)
+DB_PATH  = BASE_DIR / "stations_db.csv"           # Pre-filled via private calibration
 
 # Optional static path (enable in .streamlit/config.toml: enableStaticServing = true)
 STATIC_SVG_URL = "/static/tube_map_clean.svg"
 
 # -------------------- TUNING --------------------
-VIEW_W, VIEW_H = 980, 620        # logical viewport used for transforms
+VIEW_W, VIEW_H = 980, 620
 ZOOM        = 3.0
 RING_PX     = 28
 RING_STROKE = 6
@@ -176,6 +177,10 @@ def prefix_suggestions(q: str, names: List[str], limit: int = 5) -> List[str]:
 # -------------------- ASSETS --------------------
 @st.cache_resource(show_spinner=False)
 def load_svg_data(svg_path: Path) -> Tuple[str, float, float, bool]:
+    """
+    Returns (svg_uri, base_w, base_h, is_static).
+    Prefers static URL (/static/...) if present; else falls back to data URI.
+    """
     static_fs = BASE_DIR / ".streamlit" / "static" / "tube_map_clean.svg"
     if static_fs.exists():
         raw = static_fs.read_bytes()
@@ -213,15 +218,13 @@ def project_to_screen_precomputed(baseW: float, baseH: float, tx: float, ty: flo
     y = fy * baseH * zoom + ty
     return x, y
 
-# -------------------- MAP (responsive, centered) --------------------
+# -------------------- MAP (classic fixed canvas) --------------------
 def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
                     tx: float, ty: float, zoom: float, colorize: bool, ring_color: str,
                     overlays: Optional[List[Tuple[float, float, str, float]]] = None) -> str:
     """
-    Responsive iframe content:
-      - A fixed-size "inner" canvas (VIEW_W x VIEW_H) that holds IMG + SVG overlay
-      - The entire inner is scaled uniformly to the outer width (keeps crop centered)
-      - Parent iframe is auto-resized via postMessage for zero extra spacing
+    Fixed 980x620 inner canvas (like original), no JS, no responsiveness.
+    Base map is <img> with CSS grayscale (mobile-safe). Overlay is SVG for ring/markers.
     """
     r_px = max(RING_PX, 0.010 * min(baseW, baseH) * zoom)
     css_gray  = "" if colorize else "filter: grayscale(1); -webkit-filter: grayscale(1);"
@@ -238,20 +241,10 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root {{ --scale: 1; }}
   html,body {{ margin:0; padding:0; background:transparent; }}
-  .outer {{
-    width: 100%;
-    position: relative;
-    /* aspect ratio placeholder so the parent can measure before we scale */
-    padding-top: { (VIEW_H / VIEW_W) * 100:.6f}%;
-  }}
   .stage {{
-    position: absolute; left: 50%; top: 50%;
-    width: {VIEW_W}px; height: {VIEW_H}px;
-    transform: translate(-50%, -50%) scale(var(--scale));
-    transform-origin: 0 0;
-    border-radius: 14px; overflow: hidden; background:#0f1115;
+    width:{VIEW_W}px; height:{VIEW_H}px;
+    border-radius:14px; overflow:hidden; background:#0f1115;
   }}
   img.map {{
     position:absolute; left:0; top:0; width:{baseW}px; height:{baseH}px;
@@ -260,14 +253,15 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
     display:block; pointer-events:none;
   }}
   svg.overlay {{
-    position:absolute; left:0; top:0; width:100%; height:100%;
+    position:absolute; left:0; top:0; width:{VIEW_W}px; height:{VIEW_H}px;
     display:block; pointer-events:none;
   }}
+  .wrap {{ position:relative; width:{VIEW_W}px; height:{VIEW_H}px; }}
 </style>
 </head>
 <body>
-  <div id="outer" class="outer">
-    <div id="stage" class="stage">
+  <div class="stage">
+    <div class="wrap">
       <img class="map" src="{svg_uri}" alt="map"/>
       <svg class="overlay" viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
         <circle cx="{VIEW_W/2}" cy="{VIEW_H/2}" r="{r_px}"
@@ -276,25 +270,6 @@ def make_map_srcdoc(svg_uri: str, baseW: float, baseH: float,
       </svg>
     </div>
   </div>
-<script>
-(function() {{
-  const OUTER_RATIO = {VIEW_H / VIEW_W:.10f};
-  const VIEW_W = {VIEW_W};
-  function resize() {{
-    const outer = document.getElementById('outer');
-    const stage = document.getElementById('stage');
-    const w = outer.clientWidth;
-    const s = w / VIEW_W;
-    document.documentElement.style.setProperty('--scale', s);
-    // Real height after scaling:
-    const h = w * OUTER_RATIO;
-    // Tell Streamlit to resize the iframe to fit
-    window.parent.postMessage({{ type: 'streamlit:setFrameHeight', height: h }}, '*');
-  }}
-  window.addEventListener('load', resize);
-  window.addEventListener('resize', resize);
-}})();
-</script>
 </body></html>"""
 
 # -------------------- CARDS --------------------
@@ -362,9 +337,9 @@ def play_fragment(answer: 'Station', stations, by_key, names, svg_uri, svg_w, sv
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # Responsive, centered, sandboxed map (parent height auto-adjusts)
+        # Stable, classic canvas (exact crop), grayscale via CSS on <img>
         srcdoc = make_map_srcdoc(svg_uri, svg_w, svg_h, tx, ty, ZOOM, colorize, ring, overlays)
-        st_html(srcdoc, height=VIEW_H, width=None, scrolling=False)
+        st_html(srcdoc, height=VIEW_H, width=VIEW_W, scrolling=False)
 
         # Guess input immediately under the map
         st.markdown('<div class="guess-wrap">', unsafe_allow_html=True)
