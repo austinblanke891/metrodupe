@@ -1,0 +1,380 @@
+name,fx,fy,lines
+Maida Vale,0.295,0.384549,bakerloo
+Warwick Avenue,0.304,0.389056,bakerloo
+Harrow and Wealdstone,0.288,0.22382,bakerloo;overground
+Kenton,0.288,0.24485,bakerloo;overground
+South Kenton,0.287,0.280901,bakerloo;overground
+North Wembley,0.286,0.292918,bakerloo;overground
+Wembley Central,0.288,0.301931,bakerloo;overground
+Stonebridge Park,0.287,0.312446,bakerloo;overground
+Harlesden,0.286,0.322961,bakerloo;overground
+Willesden Junction,0.288,0.331974,bakerloo;overground
+Kensal Green,0.288,0.342489,bakerloo;overground
+Queens Park,0.288,0.351502,bakerloo;overground
+Kilburn Park,0.288,0.375536,bakerloo
+Paddington,0.338,0.401073,bakerloo;circle;district;elizabeth line;hammersmith & city
+Edgeware Road (Bakerloo),0.347,0.387554,bakerloo
+Marylebone,0.372,0.387554,bakerloo;national rail
+Baker Street,0.397,0.399571,bakerloo;circle;hammersmith & city;jubilee;metropolitan
+Regents Park,0.408,0.426609,bakerloo
+Oxford Circus,0.415,0.45515,bakerloo;central;victoria
+Piccadilly Circus,0.432,0.488197,bakerloo;piccadilly
+Charing Cross,0.448,0.512232,bakerloo;national rail;northern
+Embankment,0.449,0.537768,bakerloo;circle;district;northern
+Waterloo,0.448,0.569313,bakerloo;jubilee;national rail;northern;waterloo & city
+Lambeth North,0.453,0.611373,bakerloo
+Elephant and Castle,0.462,0.656438,bakerloo;national rail;northern;thameslink
+Brixton,0.449,0.713519,national rail;victoria
+Stockwell,0.431,0.687983,northern;victoria
+Vauxhall,0.41,0.656438,national rail;victoria
+Victora,0.4,0.537768,circle;district;national rail;victoria
+Green Park,0.404,0.486695,jubilee;victoria;piccadilly
+Warren Street,0.447,0.408584,northern;victoria
+Pimlico,0.401,0.585837,victoria
+Euston,0.457,0.374034,national rail;northern;overground;victoria
+Kings Cross St. Pancras,0.483,0.387554,circle;hammersmith & city;metropolitan;national rail;northern;piccadilly;thameslink;victoria
+Highbury and Islington,0.544,0.336481,national rail;overground;victoria
+Finsbury Park,0.543,0.289914,national rail;piccadilly;victoria
+Seven Sisters,0.578,0.264378,national rail;overground;victoria
+Tottenham Hale,0.592,0.264378,national rail;victoria
+Blackhorse Road,0.607,0.258369,overground;victoria
+Walthamstow Central,0.633,0.26588,overground;victoria
+Bank,0.521,0.471674,central;dlr;northern;waterloo & city
+Stanmore,0.324,0.2103,jubilee
+Canons Park,0.325,0.222318,jubilee
+Queensbury,0.325,0.234335,jubilee
+Kingsbury,0.324,0.247854,jubilee
+Wembley Park,0.324,0.268884,jubilee;metropolitan
+Neasden,0.333,0.270386,jubilee
+Dollis Hill,0.339,0.280901,jubilee
+Willesden Green,0.345,0.289914,jubilee;metropolitan
+Kilburn,0.352,0.300429,jubilee
+West Hampstead,0.381,0.313948,jubilee;overground;thameslink
+Finchley Road,0.373,0.342489,jubilee;metropolitan
+Swiss Cottage,0.393,0.37103,jubilee
+St. Johns Wood,0.394,0.380043,jubilee
+Bond Street,0.401,0.45515,central;elizabeth line;jubilee
+Westminster,0.432,0.530258,circle;district;jubilee
+Southwark,0.467,0.590343,jubilee
+London Bridge,0.521,0.546781,jubilee;national rail;northern;thameslink
+Bermondsey,0.548,0.55279,jubilee
+Canada Water,0.585,0.557296,jubilee;overground
+Canary Wharf,0.638,0.53176,dlr;elizabeth line;jubilee
+North Greenwich,0.667,0.537768,jubilee
+Canning Town,0.679,0.485193,dlr;jubilee
+West Ham,0.679,0.410086,district;dlr;hammersmith & city;jubilee;national rail
+Stratford,0.678,0.35,central;dlr;elizabeth line;jubilee;national rail;overground
+Hammersmith,0.297,0.533262,circle;district;hammersmith & city;piccadilly
+Goldhawk Road,0.297,0.51073,circle;hammersmith & city
+Shepherds Bush Market,0.296,0.498712,circle;hammersmith & city
+Wood Lane,0.297,0.485193,circle;hammersmith & city
+Latimer Road,0.298,0.456652,circle;hammersmith & city
+Ladbroke Grove,0.298,0.444635,circle;hammersmith & city
+Westborne Park,0.298,0.43412,circle;hammersmith & city
+Royal Oak,0.303,0.422103,circle;hammersmith & city
+Edgeware Road (District/Hammersmith/Circle),0.359,0.398069,circle;district;hammersmith & city
+Great Portland Street,0.415,0.398069,circle;hammersmith & city;metropolitan
+Euston Square,0.44,0.395064,circle;hammersmith & city;metropolitan
+Farringdon,0.491,0.414592,circle;elizabeth line;hammersmith & city;metropolitan;national rail;thameslink
+Barbican,0.505,0.43412,circle;hammersmith & city;metropolitan
+Liverpool Street,0.529,0.423605,central;circle;elizabeth line;hammersmith & city;metropolitan;national rail;overground
+Aldgate,0.562,0.467167,circle;metropolitan
+Tower Hill,0.554,0.494206,circle;district
+Monument,0.535,0.494206,circle;district
+Cannon Street,0.51,0.500215,circle;district
+Mansion House,0.502,0.507725,circle;district
+Blakfriars,0.489,0.530258,circle;district;national rail;thameslink
+Temple,0.475,0.542275,circle;district
+St. Jamess Park,0.413,0.543777,circle;district
+Sloane Square,0.383,0.543777,circle;district
+South Kensington,0.363,0.536266,circle;district;piccadilly
+Gloucester Road,0.352,0.537768,circle;district;piccadilly
+High Street Kensington,0.339,0.501717,circle;district
+Notting Hill Gate,0.338,0.474678,central;circle;district
+Bayswater,0.339,0.437124,circle;district
+Barking,0.722,0.365021,district;hammersmith & city;overground
+East Ham,0.715,0.380043,district;hammersmith & city
+Upton Park,0.707,0.395064,district;hammersmith & city
+Plaistow,0.696,0.410086,district;hammersmith & city
+Bromley-By-Bow,0.666,0.414592,district;hammersmith & city
+Bow Road,0.646,0.41309,district;hammersmith & city
+Mile End,0.626,0.410086,district;hammersmith & city
+Stepney Green,0.611,0.417597,district;hammersmith & city
+Whitechapel,0.581,0.43412,district;elizabeth line;hammersmith & city;overground
+Aldgate East,0.577,0.449142,district;hammersmith & city
+Upminster,0.786,0.268884,district;overground
+Upminster Bridge,0.779,0.28691,district
+Hornchurch,0.772,0.297425,district
+Elm Park,0.765,0.306438,district
+Dagenham East,0.756,0.321459,district
+Dagenham Heathway,0.749,0.331974,district
+Becontree,0.742,0.342489,district
+Upney,0.733,0.353004,district
+Earls Court,0.334,0.537768,district;piccadilly
+Kensington (Olympia),0.326,0.509227,district;overground
+West Brompton,0.327,0.575322,district;overground
+Fullham Broadway,0.329,0.602361,district
+Parsons Green,0.329,0.611373,district
+Putney Bridge,0.329,0.620386,district
+East Putney,0.328000,0.642918,district
+Southfields,0.329000,0.654936,district
+Wimbledon Park,0.329000,0.668455,district
+Wimbledon,0.330000,0.695494,district;national rail;thameslink;tram
+West Kensington,0.320000,0.545279,district
+Barons Court,0.311000,0.539270,district;piccadilly
+Ravenscourt Park,0.286000,0.545279,district
+Stamford Brook,0.268000,0.543777,district
+Turnham Green,0.252000,0.537768,district;piccadilly
+Chiswick Park,0.233000,0.543777,district
+Acton Town,0.228000,0.536266,district;piccadilly
+Ealing Common,0.217000,0.507725,district;piccadilly
+Ealing Broadway,0.207000,0.473176,central;district;elizabeth line;national rail
+Gunnersbury,0.235000,0.575322,district;overground
+Kew Gardens,0.219000,0.600858,district;overground
+Richmond,0.209000,0.615880,district;national rail;overground
+Moorgate,0.517000,0.443133,circle;hammersmith & city;metropolitan;northern
+Morden,0.349000,0.812661,northern
+South Wimbledon,0.371000,0.776609,northern
+Colliers Wood,0.380000,0.766094,northern
+Tooting Broadway,0.389000,0.751073,northern
+Tooting Bec,0.394000,0.745064,northern
+Balham,0.398000,0.736052,national rail;northern
+Clapham South,0.405000,0.725536,northern
+Clapham Common,0.412000,0.718026,northern
+Clapham North,0.420000,0.706009,northern
+Oval,0.439000,0.675966,northern
+Kennington,0.450000,0.657940,northern
+Nine Elms,0.396000,0.645923,northern
+Battersea Power Station,0.376000,0.645923,northern
+Borough,0.500000,0.596352,northern
+Old Street,0.521000,0.408584,national rail;northern
+Angel,0.506000,0.399571,northern
+Leicester Square,0.447000,0.476180,northern;piccadilly
+Tottenham Court Road,0.444000,0.449142,central;elizabeth line;northern
+Goodge Street,0.446000,0.432618,northern
+Mornington Crescent,0.455000,0.360515,northern
+Camden Town,0.459000,0.345494,northern
+Chalk Farm,0.455000,0.330472,northern
+Belsize Park,0.448000,0.319957,northern
+Hampstead,0.424000,0.279399,northern
+Golders Green,0.414000,0.265880,northern
+Brent Cross,0.407000,0.252361,northern
+Hendon Central,0.398000,0.243348,northern
+Colindale,0.386000,0.225322,northern
+Burnt Oak,0.378000,0.214807,northern
+Edgeware,0.370000,0.199785,northern
+Kentish Town,0.480000,0.304936,national rail;northern;thameslink
+Tufnell Park,0.484000,0.289914,northern
+Archway,0.483000,0.265880,northern
+Highgate,0.483000,0.247854,northern
+East Finchley,0.484000,0.234335,northern
+Finchley Central,0.483000,0.220815,northern
+Mill Hill East,0.475000,0.201288,northern
+West Finchley,0.482000,0.189270,northern
+Woodside Park,0.483000,0.178755,northern
+Totteridge and Whetstone,0.482000,0.171245,northern
+High Barnet,0.483000,0.156223,national rail;northern
+Heathrow Terminal 5,0.125000,0.657940,elizabeth line;piccadilly
+Heathrow Terminal 4,0.145000,0.660944,elizabeth line;piccadilly
+Heathrow Terminals 2 and 3,0.145000,0.611373,elizabeth line;piccadilly
+Hatton Cross,0.155000,0.605365,piccadilly
+Hounslow West,0.163000,0.590343,piccadilly
+Hounslow Central,0.173000,0.578326,piccadilly
+Hounslow East,0.178000,0.567811,piccadilly
+Osterley,0.184000,0.558798,piccadilly
+Boston Manor,0.190000,0.552790,piccadilly
+Northfields,0.197000,0.539270,piccadilly
+South Ealing,0.208000,0.531760,piccadilly
+Knightsbridge,0.378000,0.516738,piccadilly
+Hyde Park Corner,0.392000,0.494206,piccadilly
+Covent Garden,0.455000,0.467167,piccadilly
+Russell Square,0.482000,0.410086,piccadilly
+Caledonian Road,0.518000,0.324464,piccadilly
+Holloway Road,0.525000,0.312446,piccadilly
+Arsenal,0.533000,0.300429,piccadilly
+Manor House,0.555000,0.258369,piccadilly
+Turnpike Lane,0.553000,0.237339,piccadilly
+Wood Green,0.554000,0.223820,piccadilly
+Bounds Green,0.553000,0.208798,piccadilly
+Arnos Grove,0.554000,0.195279,piccadilly
+Southgate,0.554000,0.181760,piccadilly
+Oakwood,0.554000,0.166738,piccadilly
+Cockfosters,0.554000,0.153219,piccadilly
+North Ealing,0.218000,0.453648,piccadilly
+Park Royal,0.219000,0.405579,piccadilly
+Alperton,0.218000,0.359013,piccadilly
+Sudbury Town,0.219000,0.334979,piccadilly
+South Harrow,0.218000,0.286910,piccadilly
+Rayners Lane,0.210000,0.259871,metropolitan;piccadilly
+Eastcote,0.203000,0.244850,metropolitan;piccadilly
+Ruislip Manor,0.195000,0.232833,metropolitan;piccadilly
+Ruislip,0.180000,0.226824,metropolitan;piccadilly
+Ickenham,0.160000,0.229828,metropolitan;piccadilly
+Hillingdon,0.149000,0.229828,metropolitan;piccadilly
+Uxbridge,0.133000,0.229828,metropolitan;piccadilly
+Amersham,0.118000,0.151717,metropolitan
+Chesham,0.132000,0.139700,metropolitan
+Chalfont and Latimer,0.158000,0.150215,metropolitan;national rail
+Chorelywood,0.182000,0.163734,metropolitan;national rail
+Rickmansworth,0.190000,0.180258,metropolitan;national rail
+Watford,0.200000,0.154721,metropolitan
+Croxley,0.201000,0.171245,metropolitan
+Moor Park,0.204000,0.195279,metropolitan
+Northwood,0.213000,0.204292,metropolitan
+Northwood Hills,0.220000,0.216309,metropolitan
+Pinner,0.228000,0.231330,metropolitan
+North Harrow,0.236000,0.241845,metropolitan
+West Harrow,0.236000,0.265880,metropolitan
+Harrow-On-The-Hill,0.256000,0.261373,metropolitan;national rail
+Northwick Park,0.277000,0.262876,metropolitan
+Preston Road,0.303000,0.259871,metropolitan
+West Ruislip,0.171000,0.208798,central
+South Ruislip,0.170000,0.295923,central;national rail
+Northolt,0.169000,0.324464,central
+Greenford,0.180000,0.368026,central;national rail
+Parivale,0.196000,0.393562,central
+Hanger Lane,0.211000,0.416094,central
+West Acton,0.233000,0.476180,central
+North Acton,0.262000,0.477682,central
+East Acton,0.275000,0.471674,central
+White City,0.290000,0.473176,central
+Shepherds Bush,0.315000,0.474678,central;national rail;overground
+Holland Park,0.327000,0.476180,central
+Queensway,0.358000,0.474678,central
+Lancaster Gate,0.373000,0.473176,central
+Marble Arch,0.378000,0.458155,central
+Chancery Lane,0.473000,0.453648,central
+St Pauls,0.502000,0.474678,central
+Bethnal Green,0.597000,0.405579,central
+Leyton,0.679000,0.318455,central
+Leytonstone,0.678000,0.286910,central
+Snaresbrook,0.679000,0.244850,central
+South Woodford,0.678000,0.232833,central
+Woodford,0.678000,0.219313,central
+Buckhurst Hill,0.682000,0.172747,central
+Loughton,0.688000,0.160730,central
+Debden,0.696000,0.148712,central
+Theydon Bois,0.704000,0.138197,central
+Epping,0.714000,0.124678,central
+Wanstead,0.688000,0.270386,central
+Redbridge,0.698000,0.267382,central
+Gants Hill,0.709000,0.270386,central
+Newbury Park,0.713000,0.256867,central
+Barkingside,0.714000,0.241845,central
+Fairlop,0.713000,0.229828,central
+Hainault,0.713000,0.217811,central
+Grange Hill,0.709000,0.199785,central
+Chingwell,0.699000,0.204292,central
+Roding Valley,0.688000,0.201288,central
+Reading,0.129000,0.334979,elizabeth line;national rail
+Twyford,0.129000,0.348498,elizabeth line;national rail
+Maidenhead,0.130000,0.362017,elizabeth line;national rail
+Taplow,0.128000,0.375536,elizabeth line;national rail
+Burnham,0.129000,0.387554,elizabeth line;national rail
+Slough,0.130000,0.401073,elizabeth line;national rail
+Langley,0.129000,0.414592,elizabeth line;national rail
+Iver,0.130000,0.425107,elizabeth line;national rail
+West Drayton,0.129000,0.447639,elizabeth line;national rail
+Hayes and Harlington,0.157000,0.464163,elizabeth line;national rail
+Southall,0.173000,0.467167,elizabeth line;national rail
+Hanwell,0.182000,0.465665,elizabeth line;national rail
+West Ealing,0.196000,0.465665,elizabeth line;national rail
+Acton Main Line,0.243000,0.441631,elizabeth line;national rail
+Custom House,0.739000,0.515236,dlr;elizabeth line
+Woolwich,0.740000,0.620386,elizabeth line
+Abbey Wood,0.740000,0.639914,elizabeth line;national rail;thameslink
+Emerson Park,0.770000,0.250858,overground
+Maryland,0.689000,0.330472,elizabeth line
+Forest Gate,0.702000,0.310944,elizabeth line
+Manor Park,0.713000,0.294421,elizabeth line
+Ilford,0.718000,0.283906,elizabeth line;national rail
+Seven Kings,0.725000,0.274893,elizabeth line;national rail
+Goodmayes,0.732000,0.264378,elizabeth line
+Chadwell Heath,0.745000,0.244850,elizabeth line
+Romford,0.755000,0.229828,elizabeth line;national rail;overground
+Gidea Park,0.765000,0.214807,elizabeth line;national rail
+Harold Wood,0.772000,0.204292,elizabeth line
+Brentwood,0.791000,0.177253,elizabeth line
+Shenfield,0.804000,0.157725,elizabeth line;national rail
+South Hampstead,0.401000,0.360515,overground
+Kilburn High Road,0.328000,0.360515,overground
+Headstone Lane,0.289000,0.211803,overground
+Hatch End,0.291000,0.198283,overground
+Carpenders Park,0.290000,0.181760,overground
+Bushey,0.290000,0.168240,national rail;overground
+Watford High Street,0.290000,0.151717,overground
+Watford Junction,0.289000,0.127682,national rail;overground
+Clapham Junction,0.361000,0.665451,national rail;overground
+Imperial Wharf,0.348000,0.620386,overground
+South Action,0.247000,0.513734,overground
+Action Central,0.247000,0.497210,overground
+Kensal Rise,0.309000,0.325966,overground
+Brondesbury Park,0.329000,0.325966,overground
+Brondesbury,0.344000,0.328970,overground
+Finchley Road and Frognal,0.392000,0.313948,overground
+Hampstead Heath,0.418000,0.312446,overground
+Gospel Oak,0.453000,0.307940,overground
+Kentish Town West,0.462000,0.316953,overground
+Camden Road,0.469000,0.328970,overground
+Caledonian Road and Barnsbury,0.526000,0.336481,overground
+Canonbury,0.562000,0.339485,overground
+Dalston Kingsland,0.574000,0.334979,overground
+Hackney Central,0.619000,0.350000,overground
+Homerton,0.633000,0.350000,overground
+Hackney Wick,0.649000,0.350000,overground
+Upper Holloway,0.490000,0.274893,overground
+Crouch Hill,0.521000,0.253863,overground
+Harringay Green Lanes,0.564000,0.244850,overground
+South Tottenham,0.591000,0.244850,overground
+Walthamstow Queens Road,0.624000,0.279399,overground
+Leyton Midland Road,0.646000,0.298927,overground
+Leytonstone High Road,0.668000,0.300429,overground
+Wanstead Park,0.694000,0.300429,overground
+Woodgrange Park,0.716000,0.319957,overground
+Barking Riverside,0.772000,0.420601,overground
+Bethnal Green (Overground),0.604000,0.384549,overground
+Cambridge Heath,0.607000,0.368026,overground
+London Fields,0.607000,0.357511,overground
+Hackney Downs,0.610000,0.339485,overground
+Clapton,0.615000,0.315451,overground
+St James Street,0.624000,0.300429,overground
+Wood Street,0.631000,0.229828,overground
+Highams Park,0.632000,0.201288,overground
+Chingford,0.631000,0.171245,overground
+Rectory Road,0.598000,0.319957,overground
+Stoke Newington,0.588000,0.303433,overground
+Stamford Hill,0.580000,0.285408,overground
+Bruce Grove,0.579000,0.223820,overground
+White (Shite) Hart Lane,0.578000,0.211803,overground
+Silver Street,0.580000,0.199785,overground
+Edmonton Green,0.578000,0.186266,overground
+Bush Hill Park,0.578000,0.154721,overground
+Enfield Town,0.578000,0.138197,overground
+Southbury,0.586000,0.169742,overground
+Turkey Street,0.595000,0.153219,overground
+Theobalds Grove,0.606000,0.139700,overground
+Cheshunt,0.613000,0.126180,national rail;overground
+Dalston Junction,0.579000,0.356009,overground
+Haggerston,0.585000,0.371030,overground
+Hoxton,0.584000,0.383047,overground
+Shoreditch High Street,0.584000,0.398069,overground
+Shadwell,0.588000,0.495708,dlr;overground
+Wapping,0.586000,0.512232,overground
+Rotherhithe,0.584000,0.539270,overground
+Surrey Quays,0.584000,0.590343,overground
+New Cross,0.593000,0.632403,national rail;overground
+New Cross Gate,0.585000,0.645923,national rail;overground
+Brockley,0.585000,0.665451,national rail;overground
+Honor Oak Park (Home of GKT),0.584000,0.677468,national rail;overground
+Forrest Hill,0.585000,0.689485,national rail;overground
+Sydenham,0.584000,0.701502,national rail;overground
+Crystal Palace,0.568000,0.734549,national rail;overground
+Penge West,0.585000,0.721030,national rail;overground
+Anerley,0.584000,0.733047,national rail;overground
+Northwood Junction,0.585000,0.746567,national rail;overground;thameslink
+West Croydon,0.588000,0.769099,national rail;overground;tram
+Queens Road Peckham,0.542000,0.644421,national rail;overground
+Peckham Rye,0.530000,0.660944,national rail;overground;thameslink
+Denmark Hill,0.498000,0.666953,national rail;overground;thameslink
+Clapham High Street,0.420000,0.689485,national rail;overground
+Wandsworth Road,0.393000,0.672961,national rail;overground
