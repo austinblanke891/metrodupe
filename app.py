@@ -344,11 +344,19 @@ elif st.session_state.phase in ("play","end"):
                 placeholder="Start typing… then press Enter",
                 label_visibility="collapsed",
             )
-            sugg = prefix_suggestions(q_now or "", NAMES, limit=5)
+
+            # === CHANGED: request 8 suggestions ===
+            sugg = prefix_suggestions(q_now or "", NAMES, limit=8)
+
             if sugg:
                 box = st.container()
-                for s in sugg:
-                    if box.button(s, key=f"sugg_{norm(s)}", use_container_width=True):
+
+                # === NEW: two equal-width columns that fill the same total width ===
+                col_l, col_r = box.columns(2)
+
+                for i, s in enumerate(sugg):
+                    col = col_l if i % 2 == 0 else col_r
+                    if col.button(s, key=f"sugg_{norm(s)}", use_container_width=True):
                         st.session_state.history.append(s)
                         st.session_state.remaining -= 1
                         chosen = resolve_guess(s, BY_KEY)
