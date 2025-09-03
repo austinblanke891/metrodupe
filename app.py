@@ -242,6 +242,17 @@ st.markdown(
       .post-input { margin-top:6px; }
       .play-center { display:flex; justify-content:center; }
       .play-center .stButton>button { min-width:220px; border-radius:9999px; padding:10px 18px; font-size:1rem; }
+
+      /* --- Streak pill for practice --- */
+      .streak-pill {
+        display:flex; align-items:center; justify-content:center;
+        margin: 2px auto 8px auto;
+        width: 100%;
+      }
+      .streak-pill span {
+        background:#111827; color:#fff; font-weight:600; font-size:.95rem;
+        padding:6px 12px; border-radius:9999px; opacity:0.95;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -257,6 +268,9 @@ if "phase" not in st.session_state:
     st.session_state.won=False
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
+# ---- NEW: practice streak counter ----
+if "streak" not in st.session_state:
+    st.session_state.streak = 0
 
 # Load assets & data
 SVG_URI, SVG_W, SVG_H = load_svg_data(SVG_PATH)
@@ -333,8 +347,12 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
+        # ---- NEW: show centered streak only in practice mode ----
+        if st.session_state.mode == "practice":
+            st.markdown(f'<div class="streak-pill"><span>Practice streak: {st.session_state.streak}</span></div>', unsafe_allow_html=True)
+
         html_map = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels)
-        # *** KEY CHANGE: render inline (no iframe) => no big gap ***
+        # render inline (no iframe) => no big gap
         st.markdown(html_map, unsafe_allow_html=True)
 
         if st.session_state.phase == "play":
@@ -345,13 +363,11 @@ elif st.session_state.phase in ("play","end"):
                 label_visibility="collapsed",
             )
 
-            # === CHANGED: request 8 suggestions ===
+            # 8 suggestions in two columns
             sugg = prefix_suggestions(q_now or "", NAMES, limit=8)
 
             if sugg:
                 box = st.container()
-
-                # === NEW: two equal-width columns that fill the same total width ===
                 col_l, col_r = box.columns(2)
 
                 for i, s in enumerate(sugg):
@@ -364,6 +380,9 @@ elif st.session_state.phase in ("play","end"):
                             st.session_state.won = True
                             st.session_state.phase = "end"
                             st.session_state["feedback"] = ""
+                            # ---- NEW: increment streak on win in practice ----
+                            if st.session_state.mode == "practice":
+                                st.session_state.streak += 1
                         else:
                             if chosen and same_line(chosen, answer):
                                 lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
@@ -373,6 +392,9 @@ elif st.session_state.phase in ("play","end"):
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
+                                # ---- NEW: reset streak on loss in practice ----
+                                if st.session_state.mode == "practice":
+                                    st.session_state.streak = 0
                         st.rerun()
 
         if st.session_state.get("feedback"):
