@@ -268,7 +268,7 @@ if "phase" not in st.session_state:
     st.session_state.won=False
 if "feedback" not in st.session_state:
     st.session_state["feedback"] = ""
-# ---- NEW: practice streak counter ----
+# Practice streak (practice only)
 if "streak" not in st.session_state:
     st.session_state.streak = 0
 
@@ -347,12 +347,14 @@ elif st.session_state.phase in ("play","end"):
 
     _L, mid, _R = st.columns([1,2,1])
     with mid:
-        # ---- NEW: show centered streak only in practice mode ----
+        # Show centered streak only in practice mode
         if st.session_state.mode == "practice":
-            st.markdown(f'<div class="streak-pill"><span>Practice streak: {st.session_state.streak}</span></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="streak-pill"><span>Practice streak: {st.session_state.streak}</span></div>',
+                unsafe_allow_html=True
+            )
 
         html_map = make_map_html(SVG_URI, SVG_W, SVG_H, answer.fx, answer.fy, ZOOM, colorize, ring, rings_and_labels)
-        # render inline (no iframe) => no big gap
         st.markdown(html_map, unsafe_allow_html=True)
 
         if st.session_state.phase == "play":
@@ -380,9 +382,14 @@ elif st.session_state.phase in ("play","end"):
                             st.session_state.won = True
                             st.session_state.phase = "end"
                             st.session_state["feedback"] = ""
-                            # ---- NEW: increment streak on win in practice ----
+
+                            # PRACTICE STREAK RULE:
+                            # Increment only if it's a FIRST-TRY win; otherwise reset.
                             if st.session_state.mode == "practice":
-                                st.session_state.streak += 1
+                                if len(st.session_state.history) == 1:
+                                    st.session_state.streak += 1
+                                else:
+                                    st.session_state.streak = 0
                         else:
                             if chosen and same_line(chosen, answer):
                                 lines = ", ".join(overlap_lines(chosen, answer)) or "right line"
@@ -392,7 +399,7 @@ elif st.session_state.phase in ("play","end"):
                             if st.session_state.remaining <= 0:
                                 st.session_state.won = False
                                 st.session_state.phase = "end"
-                                # ---- NEW: reset streak on loss in practice ----
+                                # Reset streak on loss
                                 if st.session_state.mode == "practice":
                                     st.session_state.streak = 0
                         st.rerun()
